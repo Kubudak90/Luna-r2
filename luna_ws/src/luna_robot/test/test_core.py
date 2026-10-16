@@ -178,15 +178,14 @@ class Docking(unittest.TestCase):
         self.assertEqual((d.state, d.retries), ('CHARGING', 0))
 
     def test_sustained_contact_loss_backs_off(self):
-        for state in ('CONTACT', 'CHARGING'):
-            with self.subTest(state=state):
-                d = Dock()
-                d.state = state
-                window = round(d.cfg.sense_loss_s / 0.05)
-                self.run_to(d, Obs(), ticks=window - 1)
-                self.assertEqual(d.state, state)                      # still inside the debounce window
-                self.run_to(d, Obs(), ticks=2)
-                self.assertEqual((d.state, d.retries), ('BACKOFF', 1))
+        # Contact lost before charging started: the dock attempt failed.
+        d = Dock()
+        d.state = 'CONTACT'
+        window = round(d.cfg.sense_loss_s / 0.05)
+        self.run_to(d, Obs(), ticks=window - 1)
+        self.assertEqual(d.state, 'CONTACT')                          # still inside the debounce window
+        self.run_to(d, Obs(), ticks=2)
+        self.assertEqual((d.state, d.retries), ('BACKOFF', 1))
 
     def test_charge_current_lagging_a_bounce_keeps_charging(self):
         # Charge current comes from the BMS at 5 Hz, so after a bounce it can return later than DOCK_SENSE.
@@ -205,6 +204,48 @@ class Docking(unittest.TestCase):
         self.assertEqual(d.state, 'CHARGING')
         self.run_to(d, Obs(dock_sense=True, charging=False), ticks=2)
         self.assertEqual((d.state, d.retries), ('DOCKED', 0))
+
+    def test_docked_resumes_charging_when_current_returns(self):
+        # The charger paused, or the pack drained below the charger's restart point.
+        d = Dock()
+        d.state = 'DOCKED'
+        self.run_to(d, Obs(dock_sense=True, charging=False), ticks=100)
+        self.assertEqual(d.state, 'DOCKED')
+        self.assertEqual(d.step(Obs(dock_sense=True, charging=True), 0.05), (0.0, 0.0))
+        self.assertEqual((d.state, d.retries), ('CHARGING', 0))
+
+    def test_docked_contact_bounce_stays_docked(self):
+        d = Dock()
+        d.state = 'DOCKED'
+        just_under = round(d.cfg.sense_loss_s / 0.05) - 1
+        for _ in range(10):
+            self.run_to(d, Obs(), ticks=just_under)
+            self.run_to(d, Obs(dock_sense=True), ticks=1)
+        self.assertEqual((d.state, d.retries), ('DOCKED', 0))
+
+    def test_lifted_off_the_dock_goes_idle(self):
+        # Not a failed dock: Luna may be used before it is full. IDLE lets dock_node's battery policy send
+        # it back to the dock when the pack needs it.
+        for state in ('CHARGING', 'DOCKED'):
+            with self.subTest(state=state):
+                d = Dock()
+                d.state = state
+                window = round(d.cfg.sense_loss_s / 0.05)
+                self.run_to(d, Obs(), ticks=window - 1)
+                self.assertEqual(d.state, state)                      # still inside the debounce window
+                out = self.run_to(d, Obs(), ticks=2)
+                self.assertEqual((d.state, d.retries), ('IDLE', 0))
+                self.assertEqual(set(out), {(0.0, 0.0)})              # no reversing off a dock it left
+
+    def test_undock_from_docked_reverses_then_idle(self):
+        d = Dock()
+        d.state = 'DOCKED'
+        d.request('undock')
+        self.assertEqual(d.state, 'UNDOCK')
+        lin, _ = d.step(Obs(dock_sense=True), 0.05)
+        self.assertLess(lin, 0)
+        self.run_to(d, Obs(), ticks=100)
+        self.assertEqual(d.state, 'IDLE')
 
     def test_undock_reverses_then_idle(self):
         d = Dock()

@@ -41,7 +41,7 @@ class Dock:
     state: str = 'IDLE'
     t: float = 0.0
     retries: int = 0
-    lost: float = 0.0                 # s DOCK_SENSE has been continuously false in CONTACT/CHARGING
+    lost: float = 0.0                 # s DOCK_SENSE has been continuously false in CONTACT/CHARGING/DOCKED
     uncharged: float = 0.0            # s charge current has been continuously absent in CHARGING
 
     def _go(self, state):
@@ -61,7 +61,7 @@ class Dock:
         c = self.cfg
         self.t += dt
         s = self.state
-        if s in ('IDLE', 'FAULT', 'DOCKED'):
+        if s in ('IDLE', 'FAULT'):
             return 0.0, 0.0
         if s == 'SEEK':
             if o.tag_visible:
@@ -87,13 +87,25 @@ class Dock:
                 return self._retry()
             speed = c.creep_speed if o.tag_distance < c.creep_distance else c.approach_speed
             return speed, -c.k_turn * o.tag_offset
-        if s in ('CONTACT', 'CHARGING'):
+        if s in ('CONTACT', 'CHARGING', 'DOCKED'):
             # The MCU publishes one undebounced ADC read per tick, so contact bounce must not end the
             # dock: only `sense_loss_s` of continuous loss counts, and any true sample restarts it.
             if not o.dock_sense:
                 self.lost += dt
-                return self._retry() if self.lost >= c.sense_loss_s else (0.0, 0.0)
+                if self.lost < c.sense_loss_s:
+                    return 0.0, 0.0
+                if s == 'CONTACT':
+                    return self._retry()      # never charged: the dock attempt failed
+                # Lifted or pushed off once charging had started: not a failed dock, as Luna may be used
+                # before it is full. IDLE hands the call to dock_node, which seeks again only when the
+                # battery policy asks and `auto_dock` is on.
+                self._go('IDLE')
+                return 0.0, 0.0
             self.lost = 0.0
+        if s == 'DOCKED':
+            if o.charging:
+                self._go('CHARGING')          # charger resumed or the pack fell below its restart point
+            return 0.0, 0.0
         if s == 'CONTACT':
             if o.charging and self.t >= c.contact_settle:
                 self._go('CHARGING')
