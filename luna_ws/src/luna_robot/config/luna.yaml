@@ -1,0 +1,29 @@
+# Luna runtime parameters. Values marked CALIBRATE must be measured on the assembled robot.
+luna_base:
+  ros__parameters:
+    rate_hz: 50.0
+    turn_slip: 1.35          # CALIBRATE: skid-steer factor on the real floor
+    floor_nominal_m: 0.055   # CALIBRATE: VL53L4CD reading on flat floor
+
+luna_head:
+  ros__parameters:
+    pan_center_us: 1500.0    # CALIBRATE: CAD spline phase is not a live servo neutral
+    tilt_center_us: 1500.0   # CALIBRATE
+    pan_direction: 1
+    tilt_direction: 1
+
+luna_dock:
+  ros__parameters:
+    auto_dock: true
+
+luna_face_bridge:
+  ros__parameters:
+    host: 127.0.0.1          # 0.0.0.0 only on a trusted LAN (phone face)
+    port: 8765
+    allowed_origin: http://127.0.0.1:4173
+
+luna_mock_mcu:
+  ros__parameters:
+    start_soc: 0.24          # below the 25 % seek threshold: the mock docks by itself
+    dock_distance_m: 1.2
+    drain_w: 44.0

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store
+
+# colcon
+luna_ws/build/
+luna_ws/install/
+luna_ws/log/
+
+# PlatformIO
+.pio/
+
+# web
+node_modules/

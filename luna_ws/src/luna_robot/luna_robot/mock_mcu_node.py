@@ -1,0 +1,70 @@
+"""Mock Teensy: lets the whole stack run with no hardware. Same topics as the real micro-ROS firmware.
+
+Simulates (core/mock_plant.py): wheel motion (first-order lag), a dock 1.2 m ahead of the start pose with
+a visible tag, dock contact + charging and battery drain/charge."""
+from geometry_msgs.msg import PointStamped
+from rclpy.node import Node
+from sensor_msgs.msg import BatteryState
+from std_msgs.msg import Bool, Float32MultiArray, UInt8
+
+from . import topics as T
+from .entry import run
+from .core.mock_plant import DockPlant, PlantConfig
+
+
+class MockMcu(Node):
+    def __init__(self):
+        super().__init__('luna_mock_mcu')
+        self.declare_parameter('start_soc', 0.6)
+        self.declare_parameter('dock_distance_m', 1.2)
+        self.declare_parameter('drain_w', 44.0)        # Donanım ve Güç R01, normal mode
+        p = self.get_parameter
+        self.plant = DockPlant(PlantConfig(dock_distance_m=p('dock_distance_m').value,
+                                           start_soc=p('start_soc').value, drain_w=p('drain_w').value))
+        self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
+        self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
+        self.p_wheels = self.create_publisher(Float32MultiArray, T.MCU_WHEELS, 10)
+        self.p_bump = self.create_publisher(UInt8, T.MCU_BUMPERS, 10)
+        self.p_cliff = self.create_publisher(Float32MultiArray, T.MCU_CLIFF, 10)
+        self.p_corner = self.create_publisher(Float32MultiArray, T.MCU_CORNERS, 10)
+        self.p_estop = self.create_publisher(Bool, T.MCU_ESTOP, 10)
+        self.p_sense = self.create_publisher(Bool, T.MCU_DOCK_SENSE, 10)
+        self.p_batt = self.create_publisher(BatteryState, T.MCU_BATTERY, 10)
+        self.p_tag = self.create_publisher(PointStamped, T.DOCK_TAG, 10)
+        self.dt = 0.02
+        self.create_timer(self.dt, self._tick)
+
+    def _target(self, m):
+        if len(m.data) >= 2:
+            self.plant.target = [m.data[0], m.data[1]]
+
+    def _tick(self):
+        s = self.plant
+        s.step(self.dt)
+        self.p_wheels.publish(Float32MultiArray(data=[*s.pos, *s.vel]))
+        self.p_bump.publish(UInt8(data=0))
+        self.p_cliff.publish(Float32MultiArray(data=[0.055] * 4))
+        self.p_corner.publish(Float32MultiArray(data=[max(0.0, s.dist), 2.0, 2.0, 2.0]))
+        self.p_estop.publish(Bool(data=False))
+        self.p_sense.publish(Bool(data=s.docked))
+        b = BatteryState()
+        b.voltage = 12.0 + 4.8 * s.soc
+        b.percentage = s.soc
+        b.current = 3.0 if s.charging else -3.0
+        b.temperature = 28.0
+        b.present = True
+        self.p_batt.publish(b)
+        tag = s.tag()
+        if tag:                                       # tag inside the head camera's view
+            t = PointStamped()
+            t.header.stamp = self.get_clock().now().to_msg()
+            t.point.x, t.point.z = tag
+            self.p_tag.publish(t)
+
+
+def main():
+    run(MockMcu)
+
+
+if __name__ == '__main__':
+    main()

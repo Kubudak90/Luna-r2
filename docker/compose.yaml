@@ -1,0 +1,16 @@
+# Run from "Yazılım R01 2026-10-16":  docker compose -f docker/compose.yaml up --build
+services:
+  luna:
+    build: { context: .., dockerfile: docker/Dockerfile }
+    runtime: nvidia
+    network_mode: host          # face bridge on 127.0.0.1:8765 for the kiosk browser
+    restart: unless-stopped
+    devices:
+      - /dev/ttyACM0:/dev/ttyACM0   # Teensy 4.1 (micro-ROS)
+      - /dev/ttyUSB0:/dev/ttyUSB0   # RPLIDAR C1 USB adapter
+    command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true
+  luna-mock:
+    build: { context: .., dockerfile: docker/Dockerfile }
+    network_mode: host
+    profiles: [mock]
+    command: ros2 launch luna_robot luna.launch.py mock:=true

@@ -1,0 +1,164 @@
+# Luna robot yazılımı · R01 (16.10.2026)
+
+İlk robot yazılım iskeleti. Robot tarafında ROS 2 Humble, Teensy 4.1 tarafında micro-ROS, yüz tarafında tarayıcı adaptörü var. Donanım henüz alınmadığı için yığın, **sahte MCU** (`mock_mcu_node`) ile donanımsız çalışacak şekilde kuruldu. Gerçek kart geldiğinde aynı topic'ler Teensy'den gelir.
+
+## Bu ortamda doğrulananlar
+
+| Kontrol | Sonuç |
+|---|---|
+| Çekirdek mantık birim testleri: kinematik, kafa, güvenlik kapısı, batarya politikası, dock durum makinesi, yüz eşlemesi | **20/20 geçti** (`python3 -m unittest discover -s test`) |
+| Yüz köprüsünün SSE sunucusu, gerçek HTTP bağlantısıyla uçtan uca (rclpy taklit edildi) | **2/2 geçti** |
+| Tarayıcı adaptörü, **gerçek** Telefon Yüzü R01 çekirdeğiyle: çarpma → şaşırma, dock → uyku, ayrılma → uyanma | **3/3 geçti** (`cd web && npm test`) |
+| Bütün Python dosyalarının sözdizimi, URDF ve package.xml | geçti |
+
+## Henüz doğrulanmayanlar
+
+- **ROS 2 yığını gerçekten çalıştırılmadı.** Bu Mac'te ROS kurulu değil; `colcon build` ve `ros2 launch` denenmedi.
+- **Docker imajı kurulmadı.** Jetson ya da arm64 L4T ortamı gerekiyor.
+- **Teensy yazılımı derlenmedi.** PlatformIO ve micro-ROS araç zinciri burada yok.
+- **Hiçbir gerçek donanımla denenmedi.**
+
+## Yapı
+
+```
+luna_ws/src/luna_robot/
+  luna_robot/core/      ROS'tan bağımsız, test edilen mantık
+    kinematics.py         paletli (skid-steer) kinematik, odometri, 12 V motor için PWM sınırı
+    head.py               pan ±60° / tilt ±12° → servo µs, hız sınırı, yüz için bakış
+    safety.py             acil durdurma, tampon, uçurum, komut zaman aşımı kapısı
+    battery.py            4S3P SoC tahmini; dock arama / kritik / şarj kararları ve AGX güç modu
+    dock.py               SEEK → ALIGN → APPROACH → CONTACT → CHARGING → DOCKED; geri çekilme ve 3 deneme
+    face_mood.py          robot olayları → yüz olayları (tap/stroke/curious/sleep/wake/gaze)
+  luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, face_bridge, mock_mcu
+  launch/luna.launch.py   mock:=true (varsayılan) | mock:=false lidar:=true
+  config/luna.yaml        CALIBRATE işaretli değerler gerçek robotta ölçülecek
+  urdf/luna.urdf          R05 CAD'den sadeleştirilmiş çerçeveler
+firmware/luna_mcu/       Teensy 4.1 micro-ROS iskeleti (pins.h pin haritası)
+web/robot-link.js        yüz PWA'sını robota bağlayan EventSource adaptörü
+docker/                  dustynv/ros:humble-ros-base-l4t-r35.4.1 tabanlı imaj
+```
+
+## Topic sözleşmesi
+
+Teensy ile AGX arasındaki topic'lerin tek kaynağı `luna_robot/topics.py`. `firmware/luna_mcu/src/topics.h` bu dosyayla birebir aynı tutulmalı.
+
+| Yön | Topic | Tip |
+|---|---|---|
+| MCU → | `/luna/mcu/wheels` | Float32MultiArray [sol rad, sağ rad, sol rad/s, sağ rad/s] |
+| MCU → | `/luna/mcu/bumpers` · `/estop` · `/dock_sense` | UInt8 bit maskesi · Bool · Bool |
+| MCU → | `/luna/mcu/cliff` · `/corners` | Float32MultiArray (m) |
+| MCU → | `/luna/mcu/battery` | sensor_msgs/BatteryState (BMS UART) |
+| → MCU | `/luna/mcu/wheel_target` | [sol rad/s, sağ rad/s, pwm_cap] |
+| → MCU | `/luna/mcu/head_us` | [pan µs, tilt µs] |
+| AGX | `/cmd_vel`, `/luna/dock/request` (dock/undock/cancel), `/luna/head/target` | |
+
+Hız önceliği: dock komutu teleop'tan önce gelir. Her iki komut da güvenlik kapısından geçer. Kapı açılışta kapalıdır: MCU'dan ilk mesaj gelene kadar acil durdurma basılı sayılır.
+
+## Güvenlik katmanları
+
+1. **Donanım:** acil durdurma kontağı motor sürücünün SLP hattını ve servo regülatörlerinin EN hattını doğrudan keser.
+2. **Teensy:** acil durdurma basılıysa, sürücü hata (FLT) pini düşükse ya da 300 ms boyunca hız komutu gelmezse motorlar durur.
+3. **AGX güvenlik kapısı:**
+   - Ön tampon basılıyken ileri, arka tampon basılıyken geri gidilmez.
+   - Bir uçurum algılanırsa o yöne gidilmez.
+   - Hem önde hem arkada zemin yoksa (robot kaldırılmış olabilir) her hareket durur.
+4. **PWM sınırı:** pwm_cap = 12 V / paket gerilimi. 16.8 V'luk dolu pakette 12 V'luk motor anma geriliminin üstüne çıkılmaz.
+
+**Firmware'de iki iş bilerek eksik bırakıldı:**
+- **VL53L4CD zemin sensörleri:** okunana kadar firmware zemini 0 m bildirir. Güvenlik kapısı bunu "zemin yok" sayar ve robot yürümez.
+- **JBD BMS ayrıştırması:** yazılana kadar batarya gerilimi 0 V bildirilir, bu yüzden pwm_cap = 0 olur.
+
+İki iş tamamlanmadan gerçek robot hareket etmez; yarım firmware'le kaza olmasın diye böyle bırakıldı.
+
+## Çalıştırma (Jetson üzerinde, Docker ile)
+
+```bash
+docker compose -f docker/compose.yaml --profile mock up --build luna-mock
+```
+
+Mock koşusunda başlangıç SoC'u %24. Bu, %25'lik dock eşiğinin altında, yani robot kendiliğinden 1.2 m ilerideki dock'u arar:
+- AprilTag görünümü taklit edilir; robot hizalanır, yaklaşır ve son 60 mm'de sürünerek girer.
+- Kontak oluşunca şarj başlar ve yüz uyur.
+- Yüz olayları `http://127.0.0.1:8765/events` adresinden akar.
+
+Telefon yüzünü robota bağlamak için `web/robot-link.js` dosyası yüz PWA'sına eklenir:
+
+```js
+import { connectRobot } from './robot-link.js';
+connectRobot(face, { url: 'http://127.0.0.1:8765/events' });
+```
+
+Telefon Yüzü R01 klasörü değiştirilmedi.
+
+## Bilinen sınırlar ve sıradaki adımlar
+
+- **ROS 2 sürümü:** Xavier'de ROS 2 Humble yalnız Tier 3 düzeyinde destekleniyor ve konteynerde çalışıyor. Jazzy için Xavier'e hazır imaj yok.
+- **AprilTag düğümü:** bu pakette yok. `apriltag_ros` bağlanıp etiket ölçümü `/luna/dock/tag` topic'ine (PointStamped: x = yatay sapma, z = mesafe) yayımlanacak.
+- **SLAM ve navigasyon:** bağlanmadı. Sıradaki adaylar slam_toolbox ve Nav2; LiDAR verisi `laser` çerçevesinde hazır.
+- **USB kameralar:** Arducam UVC kameralar için `usb_cam` ya da `v4l2_camera` eklenecek.
+- **Ses:** XVF3800'ün ses ve yön bilgisi bağlanmadı; yüzdeki `gaze` olayı buna da bağlanabilir.
+- **Ağır yapay zekâ işleri:** bulut Kimi 2.8 için ağ istemcisi henüz yok. Wi-Fi kartı donanım listesinde (K05).
+- **Kalibre edilecekler** (`config/luna.yaml`):
+  - skid-steer kayma katsayısı
+  - servoların gerçek orta noktası
+  - zemin sensörünün düz zemindeki okuması
+  - PID kazançları
+  - motor ileri besleme katsayısı
+- **Kablolama eşlemesi:** CAD'deki `_L` parçalar robotun kendi **sağ** tarafındadır (CAD'de ön −Y). Motor kanal 1, robotun sol paleti, yani CAD `REF_MOTOR_R`. Ayrıntı `urdf/luna.urdf` ve `pins.h` içinde.
+
+## Docker doğrulaması (16.10.2026)
+
+Bu bölüm yukarıdaki "Henüz doğrulanmayanlar" listesinin ilk maddesini günceller: ROS 2 yığını artık derlenip mock ile çalıştırıldı.
+
+**Ortam:** Mac (Apple Silicon), colima VM ve resmi `ros:humble-ros-base` arm64 imajı (Ubuntu 22.04, Python 3.10). Bu Mac'te Docker Desktop açılmadı. Paket boş bir `/ws` çalışma alanına kopyalanıp orada derlendi. Jetson imajı (`docker/Dockerfile`, dustynv L4T) **kurulmadı**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `rosdep check`, `colcon build` | geçti; bütün bağımlılıklar imajda var |
+| `colcon test` (pytest) ve `python3 -m unittest discover -s test` | **23/23 geçti** (konteynerde Py 3.10, Mac'te Py 3.14) |
+| `cd web && npm test` (Mac) | **3/3 geçti** |
+| `ros2 launch luna_robot luna.launch.py` (mock:=true) | 6 süreç başladı; robot_state_publisher URDF'deki 11 parçayı okudu |
+| `/luna/dock/state` | ALIGN → APPROACH (0.4 s) → CONTACT (22.1 s) → **CHARGING** (23.1 s); 40 s sonunda hâlâ CHARGING |
+| `/luna/power/action` | unknown → seek_dock → charge |
+| `/odom` | x: 0 → **1.1999 m** |
+| `curl -N http://127.0.0.1:8765/events` (konteyner içinden) | `curious`, `stroke`, **`sleep`** |
+| Ctrl-C ile kapanış | 6/6 süreç temiz kapandı (çıkış kodu 0) |
+
+SEEK durumu topic'te görünmez: etiket başlangıçta zaten görüş alanında olduğundan dock düğümü aynı tikte ALIGN'a geçer. Etiket görünmediğinde SEEK yayımlanıyor; düzeltmeden önceki koşuda geri çekilmeden sonra görüldü.
+
+**Bulunan ve düzeltilen hatalar**
+1. **Mock'ta dock kontağı titriyordu, robot şarja hiç geçmiyordu.** Durum CONTACT'e giriyor, 50 ms sonra BACKOFF'a düşüyor, üç denemeden sonra FAULT'ta kalıyordu; `sleep` olayı da hiç gelmedi. Nedeni şuydu: mock, kontağı yalnız burun duvarın içine geçtiği tikte (`dist <= 0`) bildiriyordu. Duvar modeli ise robotu bir önceki konuma geri itiyordu, bu yüzden DOCK_SENSE bir tik true, sonra yine false oluyordu. Düzeltme:
+   - Mock'un fizik modeli saf `core/mock_plant.py` dosyasına taşındı; `mock_mcu_node` artık ince bir sarmalayıcı.
+   - Yaylı kontaklar, sert duruştan 3 mm önce değer (`contact_travel_m`).
+   - Yeni test `DockingLoop`, gerçek `Dock` durum makinesini bu modelle kapalı döngüde koşturuyor. Test düzeltmeden önce kalıyor, sonra geçiyor.
+2. **Ctrl-C'de her düğüm traceback basıp 1 koduyla çıkıyordu**, launch da bunu "process has died" diye bildiriyordu. Düzeltme: yeni `luna_robot/entry.py` dosyasındaki ortak `run()`. Kapanış sinyallerini ve kapanış sırasında yayınla yarışan RCLError'u yutar; çalışırken çıkan gerçek hataları yine yükseltir.
+   - Eski kodla yapılan 25 kapanışta 125 düğüm çıkışının 121'i 1 koduyla bitti.
+   - Yeni kodla ilk 7 kapanışta bir kez bir düğüm askıda kaldı, bir kez de `mock_mcu_node` segfault (-11) verdi. Sonraki 67 kapanışın hepsi temiz bitti. Bu iki olayın nedeni bulunamadı; Humble'daki rclpy kapanış yarışlarından biri olabilir.
+
+**Doğrulanmayanlar**
+- Jetson/L4T imajı ve GPU tarafı; komutlar aynı, ama yalnız resmi arm64 imajında denendi.
+- `mock:=false` (`micro_ros_agent` ve Teensy yok) ile `lidar:=true` (`sllidar_ros2` yok).
+- Tarayıcıdaki yüz canlı akışa bağlanmadı; akış yalnız `curl` ile okundu.
+
+**Gözlemler**
+- 1.2 m'lik yaklaşma yaklaşık 21.7 s sürüyor, `approach_timeout` ise 25 s. Etiketi yaklaşık 1.4 m'den uzakta yakalayan robot, yaklaşmayı bitiremeden geri çekilir. Nav2 robotu dock'un yaklaşık 1 m önüne getirecekse bu yeterli.
+- Dock durum makinesi, CONTACT ya da CHARGING'de tek bir DOCK_SENSE=false örneğinde geri çekiliyordu; firmware bu sinyali debounce etmeden gönderiyor. **Sonradan düzeltildi:** artık 0.2 s kesintisiz kontak kaybından sonra geri çekiliyor (`sense_loss_s`). Firmware değişmedi.
+- Yüz akışı bağlanan istemciye mevcut durumu göndermiyordu; robot zaten şarjdayken bağlanan yüz `sleep` almıyordu. **Sonradan düzeltildi:** yeni istemci önce mevcut durumu alıyor (`MoodMapper.snapshot`).
+- Bu iki düzeltme yalnız birim testleriyle doğrulandı (Mac'te 28/28, web 3/3); Docker'da yeniden koşulmadı.
+
+**Tekrarlamak için** (Mac, depo kökü "Yazılım R01 2026-10-16"):
+
+```bash
+colima start
+docker --context colima run --rm -it -v "$PWD/luna_ws/src/luna_robot:/src/luna_robot:ro" ros:humble-ros-base bash
+```
+
+Konteynerde:
+
+```bash
+source /opt/ros/humble/setup.bash && mkdir -p /ws/src && cp -r /src/luna_robot /ws/src/ && cd /ws
+colcon build && colcon test && colcon test-result --verbose
+source install/setup.bash && ros2 launch luna_robot luna.launch.py
+```
+
+Docker Desktop bozukken `docker pull`, kimlik yardımcısında (`credsStore`) takılabilir. O durumda imaj, içinde yalnız `{}` olan bir `config.json` bulunan boş bir dizinle çekilir: `DOCKER_CONFIG=<o dizin> DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker pull ros:humble-ros-base`.
