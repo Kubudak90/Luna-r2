@@ -255,7 +255,7 @@ ros2 launch luna_robot luna.launch.py mock:=false    # tags:=usb — iki usb_cam
 **Ortam:** Mac (Apple Silicon), colima ve yerel `luna-dev:humble-tag` imajı.
 - İmaj `docker/Dockerfile.dev` ile kuruldu: `ros:humble-ros-base` üstüne `ros-humble-apriltag-ros` 3.4.0 ve `ros-humble-usb-cam` 0.8.1. İndirme 209 MB oldu; imaj 2.15 GB, tabana göre +1.03 GB.
 - Konteyner `--shm-size=512m` ve `ROS_LOCALHOST_ONLY=1` ile çalıştırıldı.
-- Aşağıdaki sayılar VM boşken alındı. Kardeş oturumların konteynerleri VM'yi doldurduğunda (yük ortalaması ~20, 4 vCPU) mock'un kendi sahte etiketiyle bile dock 25 s'lik yaklaşma süresini aşıp geri çekildi; o koşular sayılmadı.
+- Aşağıdaki sayılar VM boşken alındı; kardeş oturumların konteynerlerinden ROS ağı olarak da yalıtılmıştı (`ROS_LOCALHOST_ONLY=1`, ayrı domain). Kardeş konteynerler VM'yi doldurduğunda (yük ortalaması 20–27, 4 vCPU) mock'un kendi sahte etiketiyle bile dock yavaşladı: CHARGING 26.9 s'de geldi, boşta 22.7 s. Bir koşuda 25 s'lik yaklaşma süresi aşıldı ve robot geri çekildi. O koşular sayılmadı.
 
 | Kontrol | Sonuç |
 |---|---|
@@ -315,7 +315,7 @@ ros2 launch luna_robot luna.launch.py mock:=false    # tags:=usb — iki usb_cam
   - Düzeltme: `head_node` artık `/joint_states` yayımlıyor.
 - **Humble'da `TransformListener(spin_thread=True)` aynı düğümü ikinci bir yürütücüye ekliyor.**
   - Belirti: Bir geri çağrının içinde zaman aşımlı `lookup_transform` beklenirken `/tf` mesajları işlenmedi. Hata "Lookup would require extrapolation into the future" idi.
-  - Etki: İlk taramada tespitlerin yaklaşık yarısı bu yüzden kayboldu. Menzil grubunda 112 karenin yalnız 61'i yayımlandı.
+  - Etki: İlk taramada tespitlerin yaklaşık yarısı kayboldu; menzil grubunda 112 karenin yalnız 61'i yayımlandı. Bu sayı yalnız gösterge niteliğinde. O koşu (14:37–14:48 UTC) sırasında iki kardeş oturumun konteynerleri de aynı DDS alanındaydı (domain 0) ve kendi mock yığınlarını yayımlıyordu. Nedenin kendisi `tf2_ros` kaynağında doğrulandı; düzeltmeden sonraki bütün ölçümler yalıtılmış koşuldu (`ROS_LOCALHOST_ONLY=1`, domain 37).
   - Neden: `apriltag_ros` önce `detections`'ı, ardından etiketin `/tf`'ini yayımlıyor.
   - Düzeltme: `dock_tag_node` artık beklemiyor. Tespitler en çok `tf_wait_s` (0.2 s) bir kuyrukta bekliyor; kuyruk, TF geldikçe 10 ms'lik bir zamanlayıcıyla boşalıyor. Zamanlayıcı yalnız kuyrukta tespit varken çalışıyor.
 - **Süreçler arası 720p görüntü Fast DDS'te 2.4 s'ye kadar takılıyordu.** Bu, robotu da ilgilendiren en önemli bulgu.
