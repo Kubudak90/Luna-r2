@@ -3,7 +3,7 @@
 <package format="3">
   <name>luna_robot</name>
   <version>0.1.0</version>
-  <description>Luna companion robot: track base, pan/tilt head, docking, power policy and face bridge (ROS 2 Humble).</description>
+  <description>Luna companion robot: track base, pan/tilt head, docking, power policy, face bridge, SLAM, Nav2 and go-to-dock (ROS 2 Humble).</description>
   <maintainer email="huseyinarslan89@hotmail.com">Hüseyin Arslan</maintainer>
   <license>Proprietary</license>
 
@@ -16,6 +16,21 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <!-- mapping / navigation (luna_nav.launch.py, dock_nav_node) -->
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

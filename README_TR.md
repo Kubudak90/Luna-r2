@@ -28,11 +28,16 @@ luna_ws/src/luna_robot/
     safety.py             acil durdurma, tampon, uçurum, komut zaman aşımı kapısı
     battery.py            4S3P SoC tahmini; dock arama / kritik / şarj kararları ve AGX güç modu
     dock.py               SEEK → ALIGN → APPROACH → CONTACT → CHARGING → DOCKED; geri çekilme ve 3 deneme
+    dock_nav.py           "dock'a git": Nav2 ile dock öncesi poza, sonra dock_node'a devir (aşağıda)
+    sim2d.py              2B oda simülatörü: LiDAR, tamponlar, dock ve etiket, kayan paletler
     face_mood.py          robot olayları → yüz olayları (tap/stroke/curious/sleep/wake/gaze)
-  luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, face_bridge, mock_mcu
-  launch/luna.launch.py   mock:=true (varsayılan) | mock:=false lidar:=true
+  luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, face_bridge, mock_mcu, sim2d, dock_nav
+  launch/luna.launch.py   mock:=true (varsayılan) | sim:=true | mock:=false lidar:=true
+  launch/luna_nav.launch.py  luna + slam_toolbox + Nav2 + dock_nav (slam.launch.py, nav2.launch.py)
   config/luna.yaml        CALIBRATE işaretli değerler gerçek robotta ölçülecek
+  config/slam_*.yaml, nav2.yaml  harita/yerelleştirme ve navigasyon ayarları
   urdf/luna.urdf          R05 CAD'den sadeleştirilmiş çerçeveler
+  tools/sim_nav_check.py  simülatörde uçtan uca senaryo denetimi (Docker'da)
 firmware/luna_mcu/       Teensy 4.1 micro-ROS iskeleti (pins.h pin haritası)
 web/robot-link.js        yüz PWA'sını robota bağlayan EventSource adaptörü
 docker/                  dustynv/ros:humble-ros-base-l4t-r35.4.1 tabanlı imaj
@@ -94,7 +99,7 @@ Telefon Yüzü R01 klasörü değiştirilmedi.
 
 - **ROS 2 sürümü:** Xavier'de ROS 2 Humble yalnız Tier 3 düzeyinde destekleniyor ve konteynerde çalışıyor. Jazzy için Xavier'e hazır imaj yok.
 - **AprilTag düğümü:** bu pakette yok. `apriltag_ros` bağlanıp etiket ölçümü `/luna/dock/tag` topic'ine (PointStamped: x = yatay sapma, z = mesafe) yayımlanacak.
-- **SLAM ve navigasyon:** bağlanmadı. Sıradaki adaylar slam_toolbox ve Nav2; LiDAR verisi `laser` çerçevesinde hazır.
+- **SLAM ve navigasyon:** `slam-nav2` dalında eklendi; ayrıntı ve sınırlar aşağıda, "SLAM, Nav2 ve dock'a git" bölümünde.
 - **USB kameralar:** Arducam UVC kameralar için `usb_cam` ya da `v4l2_camera` eklenecek.
 - **Ses:** XVF3800'ün ses ve yön bilgisi bağlanmadı; yüzdeki `gaze` olayı buna da bağlanabilir.
 - **Ağır yapay zekâ işleri:** bulut Kimi 2.8 için ağ istemcisi henüz yok. Wi-Fi kartı donanım listesinde (K05).
@@ -175,3 +180,102 @@ source install/setup.bash && ros2 launch luna_robot luna.launch.py
 ```
 
 Docker Desktop bozukken `docker pull`, kimlik yardımcısında (`credsStore`) takılabilir. O durumda imaj, içinde yalnız `{}` olan bir `config.json` bulunan boş bir dizinle çekilir: `DOCKER_CONFIG=<o dizin> DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker pull ros:humble-ros-base`.
+
+## SLAM, Nav2 ve dock'a git (`slam-nav2` dalı, 17.10.2026)
+
+**Ne eklendi**
+- **slam_toolbox** (`config/slam_mapping.yaml`, `config/slam_localization.yaml`, `launch/slam.launch.py`): RPLIDAR C1 için. Tarama `laser` çerçevesinde (URDF'te z 0.58 m), menzil 12 m, 10 Hz. İki kip var: harita çıkarma ve kayıtlı haritada yerelleştirme. Yerelleştirme, haritalamanın başladığı noktada (harita orijini) başlar. Haritalamaya dock'tan başlanırsa robot dock'ta açılıp hemen konumunu bilir; başka yerde açılırsa poz `/initialpose` ile verilir.
+- **Nav2** (`config/nav2.yaml`, `launch/nav2.launch.py`):
+  - Ayak izi 0.340 m (x, palet boyu) × 0.378 m (y, R06 palet bandı).
+  - En çok 0.35 m/s ve 1.2 rad/s, yani `DriveLimits` ile aynı.
+  - Kontrolcü Regulated Pure Pursuit: yerinde dönerek yön alır, geri gitmez, engel yakınında yavaşlar.
+  - collision_monitor ayrıca yavaşlama kutusu ve "çarpışmaya ≥ 1.2 s" sınırı uygular. "Dur" bölgesi bilerek yok: dönmeyi ve geri gitmeyi de keser, robotu duvar dibinde kilitleyebilir.
+  - Yerelleştirme ve `/map` slam_toolbox'tan gelir; AMCL kullanılmıyor.
+- **Hız yolu:** controller ve recovery davranışları → `cmd_vel_nav` → velocity_smoother → `cmd_vel_smoothed` → collision_monitor → **`/cmd_vel`** → base_node (dock > `/cmd_vel` önceliği, ardından güvenlik kapısı: E-stop, tampon, uçurum, 0.3 s zaman aşımı) → MCU. Nav2 `/luna/mcu/wheel_target` ya da `/luna/dock/cmd_vel` yayımlamaz. `test/test_nav_config.py` bunu yapılandırma dosyalarında, `tools/sim_nav_check.py` de çalışan ROS grafiğinde denetler.
+- **Dock'a git** (`core/dock_nav.py` + `dock_nav_node.py`, istek `/luna/nav/dock`: `go` | `cancel`, durum `/luna/nav/dock_state`):
+  - Batarya politikası `seek_dock`/`critical` dediğinde kendiliğinden de başlar. Bu yüzden `luna_nav.launch.py`, dock_node'un kendi `auto_dock`'unu kapatır; böylece robot bulunduğu yerde dönerek etiket aramaz.
+  - Akış: IDLE → WAIT (yerelleşme ya da UNDOCK beklenir) → NAVIGATE (Nav2, dock öncesi poza) → HANDOVER (`/luna/dock/request` = `dock`) → DOCKING → DOCKED.
+  - Dock öncesi poz, dock pozunun 0.6 m önünde ve dock eksenindedir. dock_node noktaya dümen kırarak yaklaştığı için girişteki açı hatası ≈ yanal sapma / mesafe olur. Bu yüzden devir yalnız eksen etrafındaki bir konide yapılır (0.6 m'de ≤ 7.8 cm yanal sapma). Konide değilse Nav2 yeniden sürer. Simülatörde dock_node 0.6 m'den ≤ 11 cm yanal sapmayla kenetlendi, 13 cm'de başaramadı.
+  - **Dock pozu:** robot dock'a kenetlenip CHARGING'e geçtiğinde öğrenilir ve `<harita>.dock.yaml` dosyasına yazılır. Elle kaydetmek için robot dock'tayken `/luna/nav/save_dock` (std_srvs/Trigger) çağrılır.
+  - **Dock ekseni:** robotun yönünden değil, dock'un arkasındaki duvardan alınır; LiDAR'ın önündeki noktalara doğru uydurulur. Huni yamuk robotu da kabul ettiği için ilk denemede eksen robot yönünden alınmıştı. Ölçüm 5° kaymıştı, dock öncesi poz 12.7 cm yana düştü ve kenetlenme başarısız oldu. Duvar düz değilse (köşe, mobilya) robotun yönüne geri dönülür.
+  - Kayıtlı pozdan 0.5 m'den fazla sapan bir şarj pozu öğrenilmez; yerelleşme kaymış olabilir, uyarı yazılır.
+  - Haritalama kipi başlarken eski dock dosyası `.old` olarak kenara alınır, çünkü yeni haritanın çerçevesi başkadır. Dock pozu bilinmiyorsa `go`, eskisi gibi dock_node'un etiket aramasına düşer.
+  - **Hata durumları:**
+    - Nav2 başarısız olursa 3 deneme yapılır.
+    - dock_node FAULT verirse robot önce Nav2 BackUp ile 0.4 m geri çekilir, sonra bir kez daha dock öncesi poza gider. FAULT'ta robot dock yüzüne dayalı kalıyor; bu konum maliyet haritasında "çarpışma" sayıldığı için Nav2 oradan ne plan yapabiliyor ne dönebiliyordu.
+    - Açılışta Nav2 henüz hazır değilse bu bir deneme sayılmaz; 60 s'ye kadar beklenir.
+    - Başarısızlıktan ya da kullanıcı iptalinden sonra batarya kaynaklı yeniden deneme 120 s bekler.
+- **2B simülatör** (`core/sim2d.py`, `sim2d_node.py`, `luna.launch.py sim:=true`): mock MCU ile aynı topic'leri yayımlar.
+  - Oda 5 × 4 m. İçinde yüksek bir dolap, bir kolon ve kuzey duvarda dock var. Dock gövdesi tarama düzleminin altında kalır.
+  - `/scan`, C1 gibi 500 ışın ve ±1 cm gürültüyle üretilir.
+  - Paletler odometrinin varsaydığından fazla kayar (gerçek kayma katsayısı 1.42, base 1.35 sanıyor; doğrusal %2). SLAM'in düzeltecek bir hatası olsun diye böyle yapıldı.
+  - Tamponlar, dock burnuna yamuk çarpma, etiketin görüş alanı, görüş açısı ve dolabın arkasında kalması modellenir.
+  - Gerçek konum `/luna/sim/truth`'ta yayımlanır, `/luna/sim/estop` ile E-stop'a basılır. Bunlar yalnız testler içindir.
+
+**Çalıştırma**
+```bash
+ros2 launch luna_robot luna_nav.launch.py                               # simülatör, harita çıkar
+ros2 launch luna_robot luna_nav.launch.py slam_mode:=localization sim_soc:=0.24   # kayıtlı harita, düşük batarya
+ros2 launch luna_robot luna_nav.launch.py sim:=false mock:=false lidar:=true slam_mode:=localization   # robot
+ros2 topic pub --once /luna/nav/dock std_msgs/String "{data: go}"
+```
+Haritayı kaydetmek (varsayılan yol `~/.luna/maps/home`; `map:=` ile değişir):
+```bash
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: /root/.luna/maps/home}"
+ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: /root/.luna/maps/home}}"
+```
+
+**Bu ortamda doğrulananlar**
+
+| Kontrol | Sonuç |
+|---|---|
+| Birim testleri (Mac, Py 3.14) | 114 testin **108'i geçti**, 6'sı PyYAML olmadığı için atlandı. Yeniler: `test_dock_nav.py` (dock'a git karar mantığı, duvar ekseni, koni, geri çekilme), `test_sim2d.py`, `test_nav_config.py` |
+| Birim testleri (Docker, Py 3.10, PyYAML var) | `python3 -m unittest` ve `colcon test` **114/114**, atlanan yok; `rosdep check` temiz |
+| Eski mock yığını (`luna.launch.py`, değişen launch dosyasıyla) | 6 süreç, `/odom` x = 1.1999 m, dock CHARGING, politika `charge`, `auto_dock` = True (bool); Ctrl-C'de 6/6 temiz |
+| `cd web && npm test` | **3/3**, asıl checkout'ta. `web/` bu dalda değişmedi. Worktree'de test, `../../Telefon Yüzü R01…` göreli yolunu bulamadığı için çalışmıyor |
+| Firmware host testleri (`./host_test/run.sh`) | **17 test, 219 kontrol** geçti |
+| Docker: haritalama senaryosu (`tools/sim_nav_check.py mapping`) | 5 koşunun 4'ünde **17/17**, birinde 16/17 (yalnız `.pgm` kaydı; aşağıda). Kenetlenme 5/5 |
+| Docker: kayıtlı haritada yerelleştirme + düşük batarya | 5 koşunun 5'inde **12/12** |
+
+Haritalama senaryosu (ayrı colima VM'si, 4 CPU):
+- Hız yolu denetimi: `/luna/mcu/wheel_target`'ı yalnız `luna_base`, `/cmd_vel`'i yalnız `collision_monitor`, `/luna/dock/cmd_vel`'i yalnız `luna_dock` yayımlıyor.
+- Dolabın arkasındaki keşif hedefine sürüş sırasında E-stop'a basıldı. Nav2 komut göndermeyi sürdürürken (47 `/cmd_vel` mesajı) base_node'un güvenlik kapısı tekerlek hedefini **0.03 s'de** sıfırladı. Robot, motor gecikmesiyle 0.42 s'de durdu. Bırakınca hedefe ulaşıldı.
+- SLAM pozu gerçek konuma göre 0.2–1.2 cm, ≤ 1.4°.
+- `go` isteğinden **21 s** sonra CHARGING. Devirde gerçek konum dock ekseninden 3.4 cm yanda ve 0.573 m önde; son konum dock'ta 0 mm (3.6° yamuk, huni kabul ediyor).
+- Duvardan öğrenilen dock pozu gerçeğe 0.2 cm ve 0.8° yakın. Pose graph ve `.pgm/.yaml` haritası kaydedildi.
+
+Yerelleştirme senaryosu: robot %24 SoC ile açıldı, batarya politikası `seek_dock` dedi ve dock_nav kendiliğinden yola çıktı. Devirde dock ekseninden 2.4 cm yandaydı. **26 s** sonra CHARGING, son konum 0 mm, ardından politika `charge`'a geçti. İki senaryonun sonunda Ctrl-C ile 15/15 süreç temiz kapandı.
+
+**Doğrulanmayanlar**
+- Gerçek RPLIDAR C1, `sllidar_ros2` sürücüsü ve onun açı yönü/sırası. Simülatör `angle_min = -π` ile yayımlıyor.
+- Gerçek dock hunisinin kabul ettiği yanal sapma ve açı. Simülatörde ±2 cm ve ±0.2 rad varsayıldı; koni (7.5°) ve 0.6 m buna göre seçildi. Gerçek huni ölçülünce `handover_entry` ayarlanmalı.
+- Jetson/L4T imajı: `docker/Dockerfile` Nav2 ve slam_toolbox içermiyor. dustynv imajlarında ROS kaynaktan derlendiği için bu ikisinin de kaynaktan derlenmesi gerekecek (Xavier'de uzun sürer). Denemeler resmi arm64 `ros:humble-ros-base` + apt ile yapıldı.
+- Uzun süreli koşu, gerçek ev haritası ve döngü kapatma; simülatördeki oda küçük.
+
+**Bulunan sorunlar ve gözlemler**
+- **slam_toolbox `transform_timeout` 0.2 s yetmedi.** Aşırı yüklü VM'de Python base_node odom TF'ini 0.3–0.8 s gecikmeyle yayımladı. slam_toolbox, taramanın TF'ini en çok `transform_timeout` kadar bekliyor; süre dolunca tarama düşüyor. Bunu tf2'nin yanıltıcı "earlier than all the data in the transform cache" mesajıyla bildiriyor. Hiç tarama işlenmeyince `map→odom` damgası donuyor ve Nav2 duruyor. 0.5 s'ye çıkarıldı (`scan_queue_size: 3`); Nav2 TF toleransları da 0.5 s yapıldı. Xavier'de de kamera ve ses yükü varken base_node'un TF gecikmesi ölçülmeli.
+- **Haritalama kipinde Nav2, haritanın o anki sınırları dışındaki bir hedefe plan yapamıyor** ("goal off the global costmap"). Başlangıçta dolap, x > 2.5 m'yi tamamen gölgeliyordu. Haritalama sırasında dock'a gidilecekse dock'un çevresi önce haritaya girmiş olmalı; yerelleştirme kipinde sorun yok.
+- **Ortak colima VM'sindeki ROS konteynerleri birbirini görüyor.** Hepsi DDS alanı 0'da ve aynı docker köprüsünde. Kamera ve ses oturumlarının konteynerleriyle ~30 s aynı ROS grafiği paylaşıldı. Bu koşularda `ROS_LOCALHOST_ONLY=1` ve `ROS_DOMAIN_ID=73` kullanıldı; diğer oturumlara da haber verildi. Ortak VM 4 çekirdekti ve diğer oturumlar ~8 çekirdeklik iş yürütüyordu; orada Nav2 zaman aşımlarına düştü. Kullanıcı onayıyla ayrı bir colima profili (`luna-nav`, 4 CPU / 6 GB) açıldı ve son koşular orada yapıldı.
+- Kapanış: aşırı yükte `controller_server`, `planner_server` ve `slam_toolbox` launch'ın SIGTERM/SIGKILL kademesine kaldı (-9); bir kez de `collision_monitor` kapanırken -11 verdi. Ayrı VM'de 15/15 temiz.
+- Ayrı VM'de, düzeltmelerden önceki bir koşuda SLAM `map→odom`'u bir kez kalıcı olarak dondurdu ve o koşu dock'a varamadı. Sonraki 10 koşuda (5 haritalama + 5 yerelleştirme) izleyici betik `map→odom`'un 3 s'den fazla eskidiğini hiç görmedi. Nedeni kesin bulunamadı; aşırı yükte tarama düşmesiyle aynı belirti. Gerçek robotta `map→odom` tazeliği izlenmeli: dock_nav 2 s'den eski pozu "yerelleşmemiş" sayar.
+- `/slam_toolbox/save_map` (`.pgm/.yaml`) 5 kayıttan birinde "Failed to spin map subscription" ile kaydetmedi: içindeki map_saver `/map`'i 2 s içinde alamadı. Yerelleştirmenin kullandığı pose graph (`serialize_map`) her seferinde kaydedildi. `.pgm` yalnız bakmak içindir; olmazsa komut tekrarlanır.
+- Kapanış, ayrı VM'de 10 koşuda: 8'inde 15/15 temiz. Bir koşuda `robot_state_publisher` kapanırken -11 verdi, bir koşuda da `planner_server` deaktivasyonda takılıp launch tarafından -9 ile kapatıldı. Python düğümlerinin hepsi her seferinde temiz kapandı.
+
+**Tekrarlamak için** (Mac, depo kökü). `luna-nav:humble` imajı, `ros:humble-ros-base` üstüne şu komutla kurulup `docker commit` ile saklanan yerel imajdır (~166 MB indirme, 488 MB içerik). İmaj varsayılan colima VM'sinde duruyor; deneme için açılan `luna-nav` VM'si iş bitince silindi.
+```bash
+apt-get update && apt-get install -y --no-install-recommends ros-humble-slam-toolbox ros-humble-nav2-controller ros-humble-nav2-planner ros-humble-nav2-navfn-planner ros-humble-nav2-behaviors ros-humble-nav2-bt-navigator ros-humble-nav2-lifecycle-manager ros-humble-nav2-velocity-smoother ros-humble-nav2-collision-monitor ros-humble-nav2-regulated-pure-pursuit-controller ros-humble-nav2-costmap-2d ros-humble-nav2-msgs ros-humble-nav2-map-server
+```
+Ortak VM başka işlerle doluysa ayrı bir profil açılır ve imaj ağ kullanmadan kopyalanır:
+```bash
+colima start --profile luna-nav --cpu 4 --memory 6
+DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker save luna-nav:humble | DOCKER_HOST=unix://$HOME/.colima/luna-nav/docker.sock docker load
+docker context use colima
+DOCKER_HOST=unix://$HOME/.colima/luna-nav/docker.sock docker run -d --name luna-nav-run --init -e ROS_LOCALHOST_ONLY=1 -e ROS_DOMAIN_ID=73 -v "$PWD/luna_ws/src/luna_robot:/src/luna_robot:ro" luna-nav:humble sleep infinity
+```
+`colima start --profile`, Docker'ın genel bağlamını yeni VM'ye çevirir; `docker context use colima` diğer oturumlar için onu geri alır. Konteynerde:
+```bash
+source /opt/ros/humble/setup.bash && mkdir -p /ws/src && cp -r /src/luna_robot /ws/src/ && cd /ws && colcon build && source install/setup.bash
+set -m; ros2 launch luna_robot luna_nav.launch.py map:=/ws/maps/room > /ws/mapping.log 2>&1 &
+python3 /ws/src/luna_robot/tools/sim_nav_check.py mapping --map /ws/maps/room
+```
+Ardından launch Ctrl-C (SIGINT) ile kapatılır ve `slam_mode:=localization sim_soc:=0.24` ile `... localization` koşulur. `set -m` gerekli: iş kontrolü kapalı kabukta arka plana atılan süreç SIGINT'i yok sayar ve launch Ctrl-C ile kapanmaz.

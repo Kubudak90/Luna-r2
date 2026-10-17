@@ -28,6 +28,8 @@ setup(
             'dock_node = luna_robot.dock_node:main',
             'face_bridge_node = luna_robot.face_bridge_node:main',
             'mock_mcu_node = luna_robot.mock_mcu_node:main',
+            'sim2d_node = luna_robot.sim2d_node:main',
+            'dock_nav_node = luna_robot.dock_nav_node:main',
         ],
     },
 )

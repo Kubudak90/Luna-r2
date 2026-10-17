@@ -1,0 +1,13 @@
+# Saved-map localization: loaded on top of slam_mapping.yaml by launch/slam.launch.py slam_mode:=localization.
+# map_file_name is set by the launch file from map:=<path without extension> (the .posegraph/.data pair written by
+# /slam_toolbox/serialize_map). The map stays fixed; recent scans only correct the robot's pose.
+slam_toolbox:
+  ros__parameters:
+    mode: localization
+    # Start where mapping started: the map origin. Start mapping on the dock and Luna can boot on the dock and be
+    # localized at once; anywhere else, give the pose on /initialpose (RViz "2D Pose Estimate").
+    # (map_start_at_dock is not supported in localization mode: slam_toolbox 2.6 warns and ignores it.)
+    map_start_pose: [0.0, 0.0, 0.0]
+    scan_buffer_size: 3              # rolling buffer of recent scans matched against the map
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 3 # slam_toolbox's own localization default
