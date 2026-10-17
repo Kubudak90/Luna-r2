@@ -1,0 +1,69 @@
+# slam_toolbox (Humble 2.6) for Luna's RPLIDAR C1: frame 'laser' on the mast, scan plane z 0.58 m
+# (urdf/luna.urdf laser_joint), 0.05–12 m, 10 Hz, ~500 samples per turn. Mapping mode (online, async).
+# slam_localization.yaml is loaded on top of this file for a saved map (launch/slam.launch.py).
+# The scan plane only sees walls and tall furniture: chairs' seats, tables and toys below 0.58 m are not mapped.
+slam_toolbox:
+  ros__parameters:
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    odom_frame: odom                 # base_node: odom → base_footprint from track odometry
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02
+    map_update_interval: 2.0
+    resolution: 0.05
+    min_laser_range: 0.10            # C1 starts at 0.05 m; nothing of the robot is in the scan plane
+    max_laser_range: 12.0            # C1 range (white target)
+    minimum_time_interval: 0.3
+    # How long a scan may wait for the odom TF of its timestamp (also how far map→odom is future-dated).
+    # base_node is Python: in a CPU-starved Docker VM its odom TF lagged 0.3–0.8 s and with 0.2 s every scan
+    # was dropped ("earlier than all the data in the transform cache"), freezing map→odom.
+    transform_timeout: 0.5
+    scan_queue_size: 3
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000      # serializing large maps needs a big stack
+    enable_interactive_mode: false
+
+    # Track odometry slips when turning (turn_slip still to be calibrated), so scan matching does the real work.
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true

@@ -31,6 +31,8 @@ setup(
             'mock_mcu_node = luna_robot.mock_mcu_node:main',
             'dock_tag_node = luna_robot.dock_tag_node:main',
             'sim_camera_node = luna_robot.sim_camera_node:main',
+            'sim2d_node = luna_robot.sim2d_node:main',
+            'dock_nav_node = luna_robot.dock_nav_node:main',
         ],
     },
 )

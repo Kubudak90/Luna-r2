@@ -43,3 +43,13 @@ luna_mock_mcu:
     drain_w: 44.0
     start_y_m: 0.0           # start pose relative to the dock axis (left +)
     start_yaw_deg: 0.0
+
+luna_sim2d:                  # sim:=true (2D room with LiDAR); start_soc comes from the sim_soc launch argument
+  ros__parameters:
+    start_pose: [0.0, 0.0, 0.0]   # world frame; keep (0, 0, 0) so the SLAM map frame equals the sim world
+    true_turn_slip: 1.42     # real skid vs. base turn_slip 1.35: odometry over-reports turns, SLAM corrects
+    linear_slip: 0.02
+
+luna_dock_nav:
+  ros__parameters:
+    standoff_m: 0.6          # pre-dock pose: this far straight back from the docked pose

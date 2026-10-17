@@ -30,3 +30,12 @@ MOCK_TRUTH = '/luna/mock/truth'          # PoseStamped, frame 'dock': true mock 
 SAFETY = '/luna/safety'                  # String: last gate reason
 POWER_ACTION = '/luna/power/action'      # String: unknown (no BMS yet) | run | seek_dock | critical | charge | overtemp
 POWER_MODE_W = '/luna/power/mode_w'      # Int32: requested AGX nvpmodel budget (10 / 15 / 30 W)
+
+# Mapping / navigation (AGX only, not in topics.h)
+SCAN = '/scan'                           # sensor_msgs/LaserScan, frame 'laser' (RPLIDAR C1 or sim2d)
+NAV_DOCK = '/luna/nav/dock'              # String: go | cancel  (Nav2 to the pre-dock pose, then dock_node)
+NAV_DOCK_STATE = '/luna/nav/dock_state'  # String: STATE or STATE:reason (core/dock_nav.py)
+NAV_PRE_DOCK = '/luna/nav/pre_dock'      # PoseStamped (map), latched: where Nav2 hands over to dock_node
+NAV_SAVE_DOCK = '/luna/nav/save_dock'    # std_srvs/Trigger: current pose = docked pose (robot on the dock)
+SIM_TRUTH = '/luna/sim/truth'            # nav_msgs/Odometry, frame 'world': sim2d ground truth, for tests only
+SIM_ESTOP = '/luna/sim/estop'            # Bool: press (true) / release the simulated E-stop, for tests only
