@@ -57,7 +57,7 @@ def counts_to_rad(counts):
 
 def pwm_cap(vbat):
     """Max PWM duty so a 12 V motor never sees more than its rating from a 16.8 V pack."""
-    if vbat <= 0:
+    if not vbat > 0:        # also NaN (no BMS reading): never let NaN through as a duty cap
         return 0.0
     return clamp(MOTOR_RATED_V / vbat, 0.0, 1.0)
 

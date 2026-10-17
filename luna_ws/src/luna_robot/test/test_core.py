@@ -41,6 +41,7 @@ class Kinematics(unittest.TestCase):
         self.assertAlmostEqual(K.pwm_cap(16.8), 12 / 16.8)
         self.assertEqual(K.pwm_cap(11.0), 1.0)
         self.assertEqual(K.pwm_cap(0), 0.0)
+        self.assertEqual(K.pwm_cap(float('nan')), 0.0)
 
     def test_odometry_straight_line(self):
         o = K.Odometry()
