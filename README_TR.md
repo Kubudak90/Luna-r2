@@ -653,8 +653,8 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 | Docker `luna-nav:humble`, `colcon test` (Py 3.10) | **204 test, 0 hata, 0 atlanan** |
 | Web (`npm test`) · firmware host testleri | 4/4 · 19 test / 246 kontrol |
 | Canlı mock yığını (`mock:=true doa:=mock`, SoC %24) | Kendiliğinden dock'a girdi, **56,7 s'de CHARGING** (bir BACKOFF ile). Bağlanan yüze `sleep`. Ses düğümleri ayakta. Ctrl-C (süreç grubuna SIGINT) 2 s'de temiz |
-| SLAM haritalama senaryosu (`sim_nav_check.py mapping`) | **Bu ortamda doğrulanamadı: 10/17.** Robot 0,15 m/s'ye çıkamadı; TF "geleceğe uzanma" hataları, "Controller patience exceeded". Yük 4 çekirdekte 23–29 |
+| SLAM haritalama senaryosu (`sim_nav_check.py mapping`, colima 8 CPU) | **17/17.** E-stop Nav2 sürerken durdurdu, keşif hedefi, dock'a git → devir → CHARGING 32.7 s, dockta 0 mm; dock pozu duvardan 1.4 cm / 0.3°; harita ve poz grafı kaydedildi |
+| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12.** Düşük batarya dock'a gidişi kendisi başlattı, CHARGING 25.4 s, dockta 0 mm |
 
-- **Neden birleştirme hatası sayılmadı:** birleştirilmemiş `slam-nav2` dalı aynı colima VM'sinde (4 CPU / 8 GB) daha da kötü sonuç verdi (5/7; controller_server heartbeat kaybı). SLAM oturumu 17/17 sonuçlarını ayrı ve daha güçlü `luna-nav` VM'sinde almıştı; o VM artık yok.
-- **Yapılacak:** senaryo daha çok çekirdekli bir VM'de (ör. 8 CPU) ya da Jetson'da yeniden koşulmalı.
-- **Deneme betiği notu:** etkileşimsiz bir kabukta `ros2 launch … &` SIGINT'i yok sayarak başlar ve `kill -INT` onu durdurmaz. Betikte `set -m` açılıp SIGINT süreç grubuna (`kill -INT -PID`) gönderilmeli.
+- **4 CPU'luk VM'de geçmiyor:** colima 4 CPU / 8 GB iken iki senaryo da işlemci yetmezliğinden düştü (TF "geleceğe uzanma", controller heartbeat; yük 23–29). Birleştirilmemiş `slam-nav2` dalı da orada geçmedi. VM 8 CPU'ya çıkarılınca (`colima start --cpu 8 --memory 8`) yük 2–4'e indi ve iki senaryo da tam geçti. Nav2 + SLAM + Python 2B simülatör için en az 8 çekirdek gerekiyor; Jetson'da gerçek sürüş ayrıca ölçülmeli.
+- **Deneme betiği notları:** etkileşimsiz bir kabukta `ros2 launch … &` SIGINT'i yok sayarak başlar; `set -m` açılıp SIGINT süreç grubuna (`kill -INT -PID`) gönderilmeli. Haritalama launch'ına `map:=/ws/maps/room` verilmezse dock pozu `~/.luna/maps/home.dock.yaml`'a yazılır ve senaryonun kayıt kontrolü düşer.
