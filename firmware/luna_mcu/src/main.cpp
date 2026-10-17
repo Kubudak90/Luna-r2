@@ -1,37 +1,58 @@
-// Luna MCU firmware skeleton (Teensy 4.1 + micro-ROS, Humble). NOT COMPILED in this delivery.
+// Luna MCU firmware (Teensy 4.1 + micro-ROS, Humble). Logic lives in lib/luna_core (host-tested).
 // Safety layers: hardware E-stop cuts driver SLP and servo EN; this firmware also stops on
-// E-stop sense, on fault pins, and when no wheel target arrives for 300 ms.
+// E-stop sense, on fault pins, when no wheel target arrives for 300 ms and while the micro-ROS
+// agent is unreachable; a 0.5 s hardware watchdog resets the MCU if the control loop hangs.
 #include <Arduino.h>
 #include <Servo.h>
 #include <Wire.h>
 #include <QuadEncoder.h>
 #include <VL53L1X.h>
+#include <vl53l4cd_class.h>
 #include <micro_ros_platformio.h>
 #include <rcl/rcl.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
+#include <rmw_microros/rmw_microros.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/u_int8.h>
 #include <std_msgs/msg/bool.h>
 #include <sensor_msgs/msg/battery_state.h>
 #include "pins.h"
 #include "topics.h"
+#include "cliff.h"
+#include "debounce.h"
+#include "drive.h"
+#include "jbd_bms.h"
+
+static_assert((int)luna::BATT_STATUS_CHARGING == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING, "BatteryState constants");
+static_assert((int)luna::BATT_STATUS_FULL == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_FULL, "BatteryState constants");
+static_assert((int)luna::BATT_HEALTH_COLD == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_COLD, "BatteryState constants");
+static_assert((int)luna::BATT_TECH_LION == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_TECHNOLOGY_LION, "BatteryState constants");
 
 static QuadEncoder enc1(1, ENC1_A, ENC1_B), enc2(2, ENC2_A, ENC2_B);
 static Servo pan, tilt;
 static VL53L1X corner[4];
-constexpr float COUNTS_PER_REV = 6533.0f;          // Pololu 4755 at the output shaft
-constexpr float KP = 0.08f, KI = 0.6f, MAX_I = 0.5f; // CALIBRATE on the real tracks
-constexpr uint32_t CMD_TIMEOUT_MS = 300;
-
-static float target[2] = {0, 0}, pwm_cap = 0.0f, integ[2] = {0, 0}, pos[2] = {0, 0}, vel[2] = {0, 0};
-static uint32_t last_cmd_ms = 0;
+// Floor sensors: stm32duino driver uses 8-bit addresses (0x52 = 7-bit 0x29).
+static VL53L4CD cliff_tof[4] = {VL53L4CD(&Wire1, XSHUT_CLIFF[0]), VL53L4CD(&Wire1, XSHUT_CLIFF[1]),
+                                VL53L4CD(&Wire1, XSHUT_CLIFF[2]), VL53L4CD(&Wire1, XSHUT_CLIFF[3])};
+constexpr uint8_t CLIFF_ADDR8[4] = {0x80, 0x82, 0x84, 0x86};   // 7-bit 0x40..0x43
+constexpr uint32_t CLIFF_STALE_MS = 100, BMS_STALE_MS = 3000, BMS_POLL_MS = 250;
+constexpr uint32_t PING_MS = 500, TIME_SYNC_MS = 60000;
+static luna::CliffChannel cliff_ch[4] = {luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS),
+                                         luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS)};
+static luna::CliffRetry cliff_retry(2000, 5);
+static luna::JbdParser bms_parser;
+static luna::BatteryMonitor bms(BMS_STALE_MS);
+static luna::DriveController ctl;
+static luna::ThresholdDebounce dock_sense(15.0f, 14.5f, 100);   // V at the contacts, 100 ms hold
 static float head_us[2] = {1500, 1500};
+static bool motors_enabled = false;
+static uint32_t publish_errors = 0, last_sync_ms = 0;
 
 rcl_publisher_t p_wheels, p_bump, p_cliff, p_corner, p_estop, p_sense, p_batt;
 rcl_subscription_t s_target, s_head;
 std_msgs__msg__Float32MultiArray m_wheels, m_cliff, m_corner, m_target, m_head;
-static float b_wheels[4], b_cliff[4], b_corner[4], b_target[3], b_head[2];
+static float b_wheels[4], b_cliff[4], b_corner[4], b_target[3], b_head[2], b_cells[luna::JBD_MAX_CELLS];
 std_msgs__msg__UInt8 m_bump;
 std_msgs__msg__Bool m_estop, m_sense;
 sensor_msgs__msg__BatteryState m_batt;
@@ -41,8 +62,28 @@ rcl_node_t node;
 rcl_allocator_t alloc;
 rcl_timer_t t_fast;
 
+enum class Agent { Waiting, Available, Connected, Disconnected };
+static Agent agent = Agent::Waiting;
+
+static void ignore(int32_t) {}                 // consumes warn_unused_result (a (void) cast does not)
+
+// WDOG1: timeout (WT + 1) x 0.5 s = 0.5 s. WDE is write-once: once started it cannot be stopped.
+// A timeout resets the whole chip (CrashReport reports it as WDOG_RST_B).
+static void watchdog_start() {
+  CCM_CCGR3 |= CCM_CCGR3_WDOG1(3);
+  WDOG1_WMCR = 0;                              // power-down counter off
+  WDOG1_WCR = WDOG_WCR_SRS | WDOG_WCR_WDA | WDOG_WCR_WT(0);
+  WDOG1_WCR |= WDOG_WCR_WDE;
+}
+
+static void watchdog_feed() { WDOG1_WSR = 0x5555; WDOG1_WSR = 0xAAAA; }
+
 static void bind(std_msgs__msg__Float32MultiArray &m, float *buf, size_t n) {
   m.data.data = buf; m.data.capacity = n; m.data.size = n;
+}
+
+static void pub(rcl_publisher_t &p, const void *m) {
+  if (rcl_publish(&p, m, NULL) != RCL_RET_OK) ++publish_errors;
 }
 
 static bool estop_pressed() { return digitalRead(ESTOP_SENSE) == HIGH; }
@@ -50,27 +91,34 @@ static bool driver_fault() { return digitalRead(M1_FLT) == LOW || digitalRead(M2
 
 static void drive(int ch, float duty) {      // duty -1..1, already limited by pwm_cap
   const int pwm = ch == 0 ? M1_PWM : M2_PWM, dir = ch == 0 ? M1_DIR : M2_DIR;
-  digitalWrite(dir, duty < 0 ? HIGH : LOW);
-  analogWrite(pwm, (int)(fabsf(duty) * 4095));
+  const luna::PwmCommand p = luna::duty_to_pwm(duty, 4095);
+  digitalWrite(dir, p.reverse ? HIGH : LOW);
+  analogWrite(pwm, p.level);
 }
 
 static void stop_all() {
-  digitalWrite(DRV_SLP, LOW); drive(0, 0); drive(1, 0); integ[0] = integ[1] = 0;
+  digitalWrite(DRV_SLP, LOW); drive(0, 0); drive(1, 0);
+  motors_enabled = false;
+}
+
+// No agent: motors off, servo EN follows the E-stop, watchdog fed from loop().
+static void hold_safe() {
+  stop_all();
+  digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
+  watchdog_feed();
 }
 
 static void on_target(const void *msg) {
   const auto *m = (const std_msgs__msg__Float32MultiArray *)msg;
   if (m->data.size < 3) return;
-  target[0] = m->data.data[0]; target[1] = m->data.data[1];
-  pwm_cap = constrain(m->data.data[2], 0.0f, 1.0f);
-  last_cmd_ms = millis();
+  ctl.set_target(m->data.data[0], m->data.data[1], m->data.data[2], millis());   // NaN → stop
 }
 
 static void on_head(const void *msg) {
   const auto *m = (const std_msgs__msg__Float32MultiArray *)msg;
   if (m->data.size < 2) return;
-  head_us[0] = constrain(m->data.data[0], 1100.0f, 1900.0f);   // ±60° mechanical window
-  head_us[1] = constrain(m->data.data[1], 1420.0f, 1580.0f);   // ±12°
+  head_us[0] = luna::clamp_finite(m->data.data[0], 1100.0f, 1900.0f, head_us[0]);   // ±60° mechanical window
+  head_us[1] = luna::clamp_finite(m->data.data[1], 1420.0f, 1580.0f, head_us[1]);   // ±12°
 }
 
 static uint8_t read_bumpers() {
@@ -85,42 +133,159 @@ static void control_100hz() {
   const uint32_t now = micros();
   const float dt = (now - last_us) * 1e-6f; last_us = now;
   const int32_t c[2] = {enc1.read(), enc2.read()};
-  for (int i = 0; i < 2; i++) {
-    const float p = c[i] / COUNTS_PER_REV * TWO_PI;
-    vel[i] = dt > 0 ? (p - pos[i]) / dt : 0; pos[i] = p;
-  }
-  const bool timed_out = millis() - last_cmd_ms > CMD_TIMEOUT_MS;
-  if (estop_pressed() || driver_fault() || timed_out || pwm_cap <= 0) { stop_all(); return; }
+  const luna::DriveOutput o = ctl.step(c, dt, millis(), estop_pressed(), driver_fault());
+  if (!o.enable) { stop_all(); return; }
   digitalWrite(DRV_SLP, HIGH);
-  for (int i = 0; i < 2; i++) {
-    const float err = target[i] - vel[i];
-    integ[i] = constrain(integ[i] + err * KI * dt, -MAX_I, MAX_I);
-    const float ff = target[i] / 10.0f;          // ~10 rad/s at full 12 V duty; CALIBRATE
-    drive(i, constrain(ff + KP * err + integ[i], -pwm_cap, pwm_cap));
+  drive(0, o.duty[0]); drive(1, o.duty[1]);
+  motors_enabled = true;
+}
+
+// The driver's I2C read retries a NACK forever, so probe first and drop a sensor that vanished.
+static bool cliff_probe(int i) {
+  Wire1.beginTransmission(CLIFF_ADDR8[i] >> 1);
+  return Wire1.endTransmission() == 0;
+}
+
+static bool cliff_start(int i) {               // sensor i must be the only one that can sit at 0x29
+  cliff_tof[i] = VL53L4CD(&Wire1, XSHUT_CLIFF[i]);   // forget the old address: InitSensor skips
+                                                     // re-addressing when it thinks it is already done
+  return cliff_tof[i].InitSensor(CLIFF_ADDR8[i]) == VL53L4CD_ERROR_NONE &&
+         cliff_tof[i].VL53L4CD_SetRangeTiming(20, 0) == VL53L4CD_ERROR_NONE &&
+         cliff_tof[i].VL53L4CD_StartRanging() == VL53L4CD_ERROR_NONE;
+}
+
+static void poll_cliff(int i) {
+  if (!cliff_ch[i].alive()) return;
+  uint8_t ready = 0;
+  if (!cliff_probe(i) || cliff_tof[i].VL53L4CD_CheckForDataReady(&ready) != VL53L4CD_ERROR_NONE) {
+    cliff_ch[i].set_alive(false);              // 0.0 (= cliff) until a re-init succeeds
+    return;
+  }
+  if (!ready) return;
+  VL53L4CD_Result_t r;
+  cliff_tof[i].VL53L4CD_ClearInterrupt();
+  if (cliff_tof[i].VL53L4CD_GetResult(&r) == VL53L4CD_ERROR_NONE) cliff_ch[i].on_sample(r.range_status, r.distance_mm, millis());
+}
+
+static void retry_dead_cliff() {
+  bool dead[4];
+  for (int k = 0; k < 4; k++) dead[k] = !cliff_ch[k].alive();
+  const int i = cliff_retry.next(dead, !motors_enabled, millis());
+  if (i < 0) return;
+  for (int k = 0; k < 4; k++) if (dead[k]) digitalWrite(XSHUT_CLIFF[k], LOW);
+  watchdog_feed();                             // InitSensor blocks for ~25 ms
+  cliff_ch[i].set_alive(cliff_start(i));
+}
+
+static void poll_bms() {
+  static uint32_t last_req = 0;
+  static bool cells_next = false;
+  while (Serial1.available()) {
+    const luna::JbdFrame f = bms_parser.feed((uint8_t)Serial1.read());
+    if (f == luna::JbdFrame::Basic) bms.on_frame(bms_parser.info(), millis());
+    else if (f == luna::JbdFrame::Cells) bms.on_cells(bms_parser.cells(), millis());
+  }
+  if (millis() - last_req >= BMS_POLL_MS) {   // 0x03 and 0x04 alternate → each at 2 Hz
+    last_req = millis();
+    uint8_t req[7];
+    bms_parser.reset();                          // a half frame must not swallow the next reply
+    Serial1.write(req, luna::jbd_build_read_request(cells_next ? luna::JBD_REG_CELLS : luna::JBD_REG_BASIC, req));
+    cells_next = !cells_next;
+  }
+}
+
+static void fill_battery() {
+  const luna::BatteryFields f = bms.fields(millis());   // present=false, voltage 0 when absent/stale
+  m_batt.voltage = f.voltage; m_batt.current = f.current; m_batt.charge = f.charge;
+  m_batt.capacity = f.capacity; m_batt.design_capacity = f.design_capacity;
+  m_batt.percentage = f.percentage; m_batt.temperature = f.temperature;
+  m_batt.power_supply_status = f.status; m_batt.power_supply_health = f.health;
+  m_batt.power_supply_technology = f.technology; m_batt.present = f.present;
+  for (uint8_t i = 0; i < f.cell_count; i++) b_cells[i] = f.cell_v[i];
+  m_batt.cell_voltage.data = b_cells; m_batt.cell_voltage.capacity = luna::JBD_MAX_CELLS;
+  m_batt.cell_voltage.size = f.cell_count;
+  if (rmw_uros_epoch_synchronized()) {
+    const int64_t ns = rmw_uros_epoch_nanos();
+    m_batt.header.stamp.sec = (int32_t)(ns / 1000000000LL);
+    m_batt.header.stamp.nanosec = (uint32_t)(ns % 1000000000LL);
   }
 }
 
 static void timer_cb(rcl_timer_t *, int64_t) {
+  watchdog_feed();
   control_100hz();
+  static uint8_t rr = 0;                         // two floor sensors per tick → each at 50 Hz
+  poll_cliff(rr); poll_cliff(rr + 1); rr = rr ? 0 : 2;
+  retry_dead_cliff();
+  poll_bms();
+  dock_sense.update(analogRead(VCHG_ADC) * (3.3f / 1023.0f) * VCHG_DIVIDER, millis());
   pan.writeMicroseconds((int)head_us[0]);
   tilt.writeMicroseconds((int)head_us[1]);
   digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
   static uint8_t div = 0;
   if (++div % 2) return;                         // publish at 50 Hz
-  b_wheels[0] = pos[0]; b_wheels[1] = pos[1]; b_wheels[2] = vel[0]; b_wheels[3] = vel[1];
-  rcl_publish(&p_wheels, &m_wheels, NULL);
-  m_bump.data = read_bumpers(); rcl_publish(&p_bump, &m_bump, NULL);
-  m_estop.data = estop_pressed(); rcl_publish(&p_estop, &m_estop, NULL);
-  m_sense.data = analogRead(VCHG_ADC) * (3.3f / 1023.0f) * VCHG_DIVIDER > 15.0f; rcl_publish(&p_sense, &m_sense, NULL);
+  b_wheels[0] = ctl.position_rad(0); b_wheels[1] = ctl.position_rad(1);
+  b_wheels[2] = ctl.velocity_rad_s(0); b_wheels[3] = ctl.velocity_rad_s(1);
+  pub(p_wheels, &m_wheels);
+  m_bump.data = read_bumpers(); pub(p_bump, &m_bump);
+  m_estop.data = estop_pressed(); pub(p_estop, &m_estop);
+  for (int i = 0; i < 4; i++) b_cliff[i] = cliff_ch[i].metres(millis());   // [FL, BL, FR, BR], 0 = cliff
+  pub(p_cliff, &m_cliff);
+  m_sense.data = dock_sense.state(); pub(p_sense, &m_sense);
   if (div % 10 == 0) {                           // 5 Hz: ranges and battery
     for (int i = 0; i < 4; i++) b_corner[i] = corner[i].read(false) / 1000.0f;
-    // TODO(R02 yazılım): VL53L4CD floor sensors on Wire1 → b_cliff; until then report 0 = "no floor" (safe stop).
-    for (int i = 0; i < 4; i++) b_cliff[i] = 0.0f;
-    rcl_publish(&p_corner, &m_corner, NULL);
-    rcl_publish(&p_cliff, &m_cliff, NULL);
-    // TODO(R02 yazılım): parse JBD BMS frames on Serial1 (0xDD 0xA5 0x03 …) into m_batt.
-    rcl_publish(&p_batt, &m_batt, NULL);
+    pub(p_corner, &m_corner);
+    fill_battery();
+    pub(p_batt, &m_batt);
   }
+}
+
+static void sync_time() {
+  ignore(rmw_uros_sync_session(100));
+  last_sync_ms = millis();
+}
+
+#define TRY(x) do { watchdog_feed(); if ((x) != RCL_RET_OK) return false; } while (0)
+
+static bool create_entities() {
+  p_wheels = p_bump = p_cliff = p_corner = p_estop = p_sense = p_batt = rcl_get_zero_initialized_publisher();
+  s_target = s_head = rcl_get_zero_initialized_subscription();
+  t_fast = rcl_get_zero_initialized_timer();
+  node = rcl_get_zero_initialized_node();
+  exec = rclc_executor_get_zero_initialized_executor();
+  alloc = rcl_get_default_allocator();
+  TRY(rclc_support_init(&support, 0, NULL, &alloc));
+  TRY(rclc_node_init_default(&node, "luna_mcu", "", &support));
+  const auto F = ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray);
+  TRY(rclc_publisher_init_best_effort(&p_wheels, &node, F, T_WHEELS));
+  TRY(rclc_publisher_init_default(&p_bump, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8), T_BUMPERS));
+  TRY(rclc_publisher_init_default(&p_cliff, &node, F, T_CLIFF));
+  TRY(rclc_publisher_init_default(&p_corner, &node, F, T_CORNERS));
+  TRY(rclc_publisher_init_default(&p_estop, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_ESTOP));
+  TRY(rclc_publisher_init_default(&p_sense, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_DOCK_SENSE));
+  TRY(rclc_publisher_init_default(&p_batt, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), T_BATTERY));
+  TRY(rclc_subscription_init_default(&s_target, &node, F, T_WHEEL_TARGET));
+  TRY(rclc_subscription_init_default(&s_head, &node, F, T_HEAD_US));
+  TRY(rclc_timer_init_default(&t_fast, &support, RCL_MS_TO_NS(10), timer_cb));
+  TRY(rclc_executor_init(&exec, &support.context, 3, &alloc));
+  TRY(rclc_executor_add_timer(&exec, &t_fast));
+  TRY(rclc_executor_add_subscription(&exec, &s_target, &m_target, &on_target, ON_NEW_DATA));
+  TRY(rclc_executor_add_subscription(&exec, &s_head, &m_head, &on_head, ON_NEW_DATA));
+  sync_time();
+  return true;
+}
+
+static void destroy_entities() {
+  rmw_context_t *ctx = rcl_context_get_rmw_context(&support.context);
+  ignore(rmw_uros_set_context_entity_destroy_session_timeout(ctx, 0));   // agent is gone: do not wait
+  for (rcl_publisher_t *p : {&p_wheels, &p_bump, &p_cliff, &p_corner, &p_estop, &p_sense, &p_batt})
+    ignore(rcl_publisher_fini(p, &node));
+  ignore(rcl_subscription_fini(&s_target, &node));
+  ignore(rcl_subscription_fini(&s_head, &node));
+  ignore(rcl_timer_fini(&t_fast));
+  ignore(rclc_executor_fini(&exec));
+  ignore(rcl_node_fini(&node));
+  ignore(rclc_support_fini(&support));
 }
 
 static void init_tof() {
@@ -133,6 +298,12 @@ static void init_tof() {
   }
 }
 
+static void init_cliff() {
+  for (auto &s : cliff_tof) s.begin();           // all XSHUT low
+  Wire1.begin(); Wire1.setClock(400000);
+  for (int i = 0; i < 4; i++) cliff_ch[i].set_alive(cliff_start(i));   // InitSensor raises XSHUT i
+}
+
 void setup() {
   for (int p : {M1_DIR, M2_DIR, DRV_SLP, SERVO_EN}) pinMode(p, OUTPUT);
   for (int p : {ESTOP_SENSE, BUMP_FL, BUMP_FR, BUMP_BL, BUMP_BR, M1_FLT, M2_FLT}) pinMode(p, INPUT_PULLUP);
@@ -141,32 +312,43 @@ void setup() {
   stop_all();
   enc1.setInitConfig(); enc1.init(); enc2.setInitConfig(); enc2.init();
   pan.attach(SERVO_PAN, 500, 2500); tilt.attach(SERVO_TILT, 500, 2500);
-  Wire.begin(); Wire.setClock(400000); init_tof();
+  Wire.begin(); Wire.setClock(400000); init_tof(); init_cliff();
   Serial1.begin(9600);                            // JBD default UART speed
 
-  set_microros_serial_transports(Serial);
-  alloc = rcl_get_default_allocator();
-  while (rclc_support_init(&support, 0, NULL, &alloc) != RCL_RET_OK) delay(500);   // wait for the agent
-  rclc_node_init_default(&node, "luna_mcu", "", &support);
-  const auto F = ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray);
-  rclc_publisher_init_best_effort(&p_wheels, &node, F, T_WHEELS);
-  rclc_publisher_init_default(&p_bump, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8), T_BUMPERS);
-  rclc_publisher_init_default(&p_cliff, &node, F, T_CLIFF);
-  rclc_publisher_init_default(&p_corner, &node, F, T_CORNERS);
-  rclc_publisher_init_default(&p_estop, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_ESTOP);
-  rclc_publisher_init_default(&p_sense, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_DOCK_SENSE);
-  rclc_publisher_init_default(&p_batt, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), T_BATTERY);
-  rclc_subscription_init_default(&s_target, &node, F, T_WHEEL_TARGET);
-  rclc_subscription_init_default(&s_head, &node, F, T_HEAD_US);
+  sensor_msgs__msg__BatteryState__init(&m_batt);   // allocates the empty strings micro-ROS serialises
   bind(m_wheels, b_wheels, 4); bind(m_cliff, b_cliff, 4); bind(m_corner, b_corner, 4);
   bind(m_target, b_target, 3); bind(m_head, b_head, 2);
-  rclc_timer_init_default(&t_fast, &support, RCL_MS_TO_NS(10), timer_cb);
-  rclc_executor_init(&exec, &support.context, 3, &alloc);
-  rclc_executor_add_timer(&exec, &t_fast);
-  rclc_executor_add_subscription(&exec, &s_target, &m_target, &on_target, ON_NEW_DATA);
-  rclc_executor_add_subscription(&exec, &s_head, &m_head, &on_head, ON_NEW_DATA);
+  Serial.begin(115200);
+  set_microros_serial_transports(Serial);
+  watchdog_start();
 }
 
+// Agent state machine (micro-ROS reconnection pattern): motors stay off unless connected.
 void loop() {
-  rclc_executor_spin_some(&exec, RCL_MS_TO_NS(2));
+  static uint32_t last_ping = 0;
+  switch (agent) {
+    case Agent::Waiting:
+      hold_safe();
+      if (millis() - last_ping >= PING_MS) {
+        last_ping = millis();
+        if (rmw_uros_ping_agent(50, 1) == RMW_RET_OK) agent = Agent::Available;
+      }
+      break;
+    case Agent::Available:
+      agent = create_entities() ? Agent::Connected : Agent::Disconnected;
+      break;
+    case Agent::Connected:
+      if (millis() - last_ping >= PING_MS) {
+        last_ping = millis();
+        if (rmw_uros_ping_agent(50, 2) != RMW_RET_OK) { agent = Agent::Disconnected; break; }
+        if (millis() - last_sync_ms >= TIME_SYNC_MS) sync_time();
+      }
+      ignore(rclc_executor_spin_some(&exec, RCL_MS_TO_NS(2)));
+      break;
+    case Agent::Disconnected:
+      hold_safe();
+      destroy_entities();
+      agent = Agent::Waiting;
+      break;
+  }
 }

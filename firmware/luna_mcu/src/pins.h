@@ -8,6 +8,9 @@ constexpr int M2_PWM = 23, M2_DIR = 21, M2_FLT = 26, M2_CS = 39;
 constexpr int DRV_SLP = 24;          // goes to BOTH SLP pins THROUGH E-stop contact 1 (hardware cut)
 
 // Encoders: 5 V supply, outputs through the Pololu #2595 level shifter.
+// Checked 2026-10-17 against QuadEncoder.cpp's ARDUINO_TEENSY41 table (0-5, 7, 8, 30, 31, 33, 36, 37):
+// 30/31 = XBAR IN23/IN22, 36/37 = XBAR IN16/IN17, all distinct → no change needed. 36/37 share
+// XBAR inputs with pins 1/0, which is fine because 0/1 are Serial1 (BMS), not encoder inputs.
 constexpr int ENC1_A = 30, ENC1_B = 31;   // left
 constexpr int ENC2_A = 36, ENC2_B = 37;   // right
 
@@ -24,4 +27,5 @@ constexpr int XSHUT_CLIFF[4] = {10, 11, 12, 33};   // FL, BL, FR, BR
 
 constexpr int VCHG_ADC = 40;         // A16, dock charge voltage via 47k/10k divider (16.8 V → 2.95 V)
 constexpr float VCHG_DIVIDER = (47.0f + 10.0f) / 10.0f;
+// I2C: Wire SDA 18 / SCL 19 (corners), Wire1 SDA1 17 / SCL1 16 (floor VL53L4CD).
 // BMS (JBD, 3.3 V TTL UART — confirm level on the chosen BMS) on Serial1: RX 0, TX 1.
