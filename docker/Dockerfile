@@ -6,10 +6,20 @@ FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
 WORKDIR /opt/luna_ws
 RUN mkdir -p src && cd src \
  && git clone --depth 1 -b humble https://github.com/micro-ROS/micro_ros_setup.git \
- && git clone --depth 1 https://github.com/Slamtec/sllidar_ros2.git
+ && git clone --depth 1 https://github.com/Slamtec/sllidar_ros2.git \
+ && git clone --depth 1 https://github.com/AprilRobotics/apriltag.git \
+ && git clone --depth 1 https://github.com/christianrauch/apriltag_msgs.git \
+ && git clone --depth 1 https://github.com/christianrauch/apriltag_ros.git \
+ && git clone --depth 1 https://github.com/ros-drivers/usb_cam.git
+# Head cameras + dock tag (NOT BUILT either). usb_cam decodes MJPG with ffmpeg. cv_bridge, image_transport and
+# camera_info_manager are assumed to be in the dustynv image; if colcon reports them missing, clone vision_opencv
+# and image_common (humble branches) above as well.
+RUN apt-get update && apt-get install -y --no-install-recommends libavcodec-dev libavformat-dev libavutil-dev \
+    libswscale-dev v4l-utils && rm -rf /var/lib/apt/lists/*
 COPY luna_ws/src/luna_robot src/luna_robot
 RUN . /opt/ros/humble/install/setup.sh \
- && colcon build --packages-select micro_ros_setup sllidar_ros2 luna_robot --symlink-install \
+ && colcon build --packages-select micro_ros_setup sllidar_ros2 apriltag apriltag_msgs apriltag_ros usb_cam luna_robot \
+    --symlink-install \
  && . install/setup.sh \
  && ros2 run micro_ros_setup create_agent_ws.sh \
  && ros2 run micro_ros_setup build_agent.sh

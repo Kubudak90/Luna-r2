@@ -13,7 +13,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/urdf', glob('urdf/*.urdf')),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/config', glob('config/*.yaml') + glob('config/*.xml')),
+        ('share/' + package_name + '/config/camera_info', glob('config/camera_info/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,6 +29,8 @@ setup(
             'dock_node = luna_robot.dock_node:main',
             'face_bridge_node = luna_robot.face_bridge_node:main',
             'mock_mcu_node = luna_robot.mock_mcu_node:main',
+            'dock_tag_node = luna_robot.dock_tag_node:main',
+            'sim_camera_node = luna_robot.sim_camera_node:main',
         ],
     },
 )

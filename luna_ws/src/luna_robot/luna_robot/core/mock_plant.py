@@ -19,6 +19,8 @@ class PlantConfig:
     motor_tau_s: float = 0.15         # first-order lag of the track speed
     dock_y_tol_m: float = 0.02        # lateral misalignment the receiver mouth still accepts
     contact_travel_m: float = 0.003   # spring contacts touch this far before the hard stop
+    start_y_m: float = 0.0            # start pose relative to the dock axis (left +)
+    start_yaw_deg: float = 0.0        # start heading relative to the dock axis (left +)
 
 
 class DockPlant:
@@ -29,7 +31,7 @@ class DockPlant:
         self.pos = [0.0, 0.0]
         self.odo = K.Odometry()
         self.wh = cfg.pack_wh * cfg.start_soc
-        self.x = self.y = self.yaw = 0.0
+        self.x, self.y, self.yaw = 0.0, cfg.start_y_m, math.radians(cfg.start_yaw_deg)
         self.dist = cfg.dock_distance_m       # mouth-to-nose distance along +x
         self.docked = False                   # DOCK_SENSE: seated on the powered dock (P4 ID)
         self.charge_enable = True             # /luna/mcu/charge_enable; false = DOCK_INHIBIT, contacts dead
@@ -47,7 +49,11 @@ class DockPlant:
         for i in range(2):
             self.vel[i] += (self.target[i] - self.vel[i]) * min(1.0, dt / c.motor_tau_s)
             self.pos[i] += self.vel[i] * dt
-        self.x, self.y, self.yaw = self.odo.update(*self.pos)
+        ox, oy, oyaw = self.odo.update(*self.pos)
+        y0 = math.radians(c.start_yaw_deg)
+        self.x = math.cos(y0) * ox - math.sin(y0) * oy
+        self.y = c.start_y_m + math.sin(y0) * ox + math.cos(y0) * oy
+        self.yaw = y0 + oyaw
         self.dist = c.dock_distance_m - self.x
         # Contact must hold while the robot rests against the wall. With `dist <= 0` it only lasted the
         # one tick of overshoot before the wall pushed the robot back, so DOCK_SENSE flickered.
