@@ -4,13 +4,17 @@ services:
     build: { context: .., dockerfile: docker/Dockerfile }
     runtime: nvidia
     network_mode: host          # face bridge on 127.0.0.1:8765 for the kiosk browser
+    shm_size: 512mb             # camera images go through Fast DDS shared memory (config/fastdds_large_images.xml)
     restart: unless-stopped
     devices:
       - /dev/ttyACM0:/dev/ttyACM0   # Teensy 4.1 (micro-ROS)
       - /dev/ttyUSB0:/dev/ttyUSB0   # RPLIDAR C1 USB adapter
-    command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true
+      - /dev/video0:/dev/video0     # head camera left  (config/cameras.yaml; use /dev/v4l/by-path names once wired)
+      - /dev/video2:/dev/video2     # head camera right
+    command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true   # tags:=usb is the default here
   luna-mock:
     build: { context: .., dockerfile: docker/Dockerfile }
     network_mode: host
+    shm_size: 512mb
     profiles: [mock]
     command: ros2 launch luna_robot luna.launch.py mock:=true

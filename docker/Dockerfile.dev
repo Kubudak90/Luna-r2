@@ -1,0 +1,7 @@
+# Mac/colima test image: the official arm64 ROS 2 Humble image plus the camera/AprilTag packages, so the
+# tags:=sim pipeline and tools/tag_sweep.py run without a Jetson. Not the robot image (that is docker/Dockerfile).
+#   docker build -t luna-dev:humble-tag -f docker/Dockerfile.dev docker      (~209 MB download, ~0.8 GB on disk)
+FROM ros:humble-ros-base
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ros-humble-apriltag-ros ros-humble-usb-cam \
+ && rm -rf /var/lib/apt/lists/*

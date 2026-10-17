@@ -1,8 +1,14 @@
 """Mock Teensy: lets the whole stack run with no hardware. Same topics as the real micro-ROS firmware.
 
 Simulates (core/mock_plant.py): wheel motion (first-order lag), a dock 1.2 m ahead of the start pose with
-a visible tag, dock contact + charging and battery drain/charge."""
-from geometry_msgs.msg import PointStamped
+a visible tag, dock contact + charging and battery drain/charge.
+
+publish_tag: true  → fakes /luna/dock/tag itself (no cameras needed).
+publish_tag: false → only publishes the true pose on /luna/mock/truth; sim_camera_node renders the tag from it
+                     and the real apriltag_ros → dock_tag_node pipeline produces /luna/dock/tag."""
+import math
+
+from geometry_msgs.msg import PointStamped, PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, Float32MultiArray, UInt8
@@ -18,9 +24,14 @@ class MockMcu(Node):
         self.declare_parameter('start_soc', 0.6)
         self.declare_parameter('dock_distance_m', 1.2)
         self.declare_parameter('drain_w', 44.0)        # Donanım ve Güç R01, normal mode
+        self.declare_parameter('start_y_m', 0.0)
+        self.declare_parameter('start_yaw_deg', 0.0)
+        self.declare_parameter('publish_tag', True)
         p = self.get_parameter
         self.plant = DockPlant(PlantConfig(dock_distance_m=p('dock_distance_m').value,
-                                           start_soc=p('start_soc').value, drain_w=p('drain_w').value))
+                                           start_soc=p('start_soc').value, drain_w=p('drain_w').value,
+                                           start_y_m=p('start_y_m').value, start_yaw_deg=p('start_yaw_deg').value))
+        self.publish_tag = p('publish_tag').value
         self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
         self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
         self.p_wheels = self.create_publisher(Float32MultiArray, T.MCU_WHEELS, 10)
@@ -31,6 +42,7 @@ class MockMcu(Node):
         self.p_sense = self.create_publisher(Bool, T.MCU_DOCK_SENSE, 10)
         self.p_batt = self.create_publisher(BatteryState, T.MCU_BATTERY, 10)
         self.p_tag = self.create_publisher(PointStamped, T.DOCK_TAG, 10)
+        self.p_truth = self.create_publisher(PoseStamped, T.MOCK_TRUTH, 10)
         self.dt = 0.02
         self.create_timer(self.dt, self._tick)
 
@@ -54,7 +66,12 @@ class MockMcu(Node):
         b.temperature = 28.0
         b.present = True
         self.p_batt.publish(b)
-        tag = s.tag()
+        truth = PoseStamped()
+        truth.header.stamp, truth.header.frame_id = self.get_clock().now().to_msg(), 'dock'
+        truth.pose.position.x, truth.pose.position.y = s.x - s.cfg.dock_distance_m, s.y   # dock frame: seated = 0
+        truth.pose.orientation.z, truth.pose.orientation.w = math.sin(s.yaw / 2), math.cos(s.yaw / 2)
+        self.p_truth.publish(truth)
+        tag = s.tag() if self.publish_tag else None
         if tag:                                       # tag inside the head camera's view
             t = PointStamped()
             t.header.stamp = self.get_clock().now().to_msg()

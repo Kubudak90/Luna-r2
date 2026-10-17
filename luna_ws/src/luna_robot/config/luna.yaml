@@ -16,6 +16,20 @@ luna_dock:
   ros__parameters:
     auto_dock: true
 
+luna_dock_tag:
+  ros__parameters:
+    cameras: [left, right]
+    tag_id: 0
+    max_age_s: 0.3           # fuse the two cameras' detections only when this close in time
+    tf_wait_s: 0.2           # how long a detection may wait for its tag TF and the head joint TF
+
+luna_sim_camera:             # tags:=sim only
+  ros__parameters:
+    cameras: [left, right]
+    rate_hz: 10.0
+    noise: 2.0
+    blur_px: 0.0
+
 luna_face_bridge:
   ros__parameters:
     host: 127.0.0.1          # 0.0.0.0 only on a trusted LAN (phone face)
@@ -27,3 +41,5 @@ luna_mock_mcu:
     start_soc: 0.24          # below the 25 % seek threshold: the mock docks by itself
     dock_distance_m: 1.2
     drain_w: 44.0
+    start_y_m: 0.0           # start pose relative to the dock axis (left +)
+    start_yaw_deg: 0.0

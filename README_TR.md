@@ -10,6 +10,7 @@
 | Yüz köprüsünün SSE sunucusu, gerçek HTTP bağlantısıyla uçtan uca (rclpy taklit edildi) | **2/2 geçti** |
 | Tarayıcı adaptörü, **gerçek** Telefon Yüzü R01 çekirdeğiyle: çarpma → şaşırma, dock → uyku, ayrılma → uyanma | **3/3 geçti** (`cd web && npm test`) |
 | Bütün Python dosyalarının sözdizimi, URDF ve package.xml | geçti |
+| Kafa kameraları ve AprilTag ile dock (17.10.2026, dal `kamera-apriltag`): sentetik görüntü taraması ve `tags:=sim` tam yığın | geçti; gerçek kamerayla denenmedi. Ayrıntı: "Kamera ve AprilTag ile dock" |
 
 ## Henüz doğrulanmayanlar
 
@@ -29,10 +30,20 @@ luna_ws/src/luna_robot/
     battery.py            4S3P SoC tahmini; dock arama / kritik / şarj kararları ve AGX güç modu
     dock.py               SEEK → ALIGN → APPROACH → CONTACT → CHARGING → DOCKED; geri çekilme ve 3 deneme
     face_mood.py          robot olayları → yüz olayları (tap/stroke/curious/sleep/wake/gaze)
-  luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, face_bridge, mock_mcu
-  launch/luna.launch.py   mock:=true (varsayılan) | mock:=false lidar:=true
+    dock_tag.py           dock AprilTag'inin base_link konumu → /luna/dock/tag (offset, mesafe); iki kamera birleştirme
+    frames.py             dönüşümler + URDF eklem zinciri (TF'in ROS'suz eşi, testler ve sim için)
+    camera_model.py       B0630 pinhole modeli (1280×720, 82°)
+    tag36h11.py           tag36h11 bit desenleri (AprilRobotics kütüphanesiyle aynı yerleşim)
+    tag_scene.py          sentetik kamera görüntüsü (numpy; sim kamera ve tarama)
+  luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, dock_tag, face_bridge, mock_mcu, sim_camera
+  launch/luna.launch.py   mock:=true (varsayılan) | mock:=false lidar:=true; tags:=mock|sim|usb
   config/luna.yaml        CALIBRATE işaretli değerler gerçek robotta ölçülecek
-  urdf/luna.urdf          R05 CAD'den sadeleştirilmiş çerçeveler
+  config/cameras.yaml     usb_cam, iki Arducam B0630 (1280×720 MJPG, 15 fps)
+  config/apriltag.yaml    apriltag_ros, tag36h11 ID 0, 48 mm
+  config/camera_info/     NOMİNAL kamera iç parametreleri (kalibre edilecek)
+  urdf/luna.urdf          R05 CAD'den sadeleştirilmiş çerçeveler; kameralar R06 modelinden, optik çerçeveler dahil
+  tools/                  tag_sweep.py (sentetik görüntü taraması), dock_watch.py, make_tag_svg.py
+docs/dock_tag36h11_id0_48mm.svg  dock etiketi baskı dosyası (%100 ölçek)
 firmware/luna_mcu/       Teensy 4.1 micro-ROS iskeleti (pins.h pin haritası)
 web/robot-link.js        yüz PWA'sını robota bağlayan EventSource adaptörü
 docker/                  dustynv/ros:humble-ros-base-l4t-r35.4.1 tabanlı imaj
@@ -50,7 +61,9 @@ Teensy ile AGX arasındaki topic'lerin tek kaynağı `luna_robot/topics.py`. `fi
 | MCU → | `/luna/mcu/battery` | sensor_msgs/BatteryState (BMS UART) |
 | → MCU | `/luna/mcu/wheel_target` | [sol rad/s, sağ rad/s, pwm_cap] |
 | → MCU | `/luna/mcu/head_us` | [pan µs, tilt µs] |
-| AGX | `/cmd_vel`, `/luna/dock/request` (dock/undock/cancel), `/luna/head/target` | |
+| AGX | `/cmd_vel`, `/luna/dock/request` (dock/undock/cancel), `/luna/head/target` (pan + sola, tilt + aşağı) | |
+| AGX | `/luna/dock/tag` | PointStamped: x = etiketin gövdeye göre yönü (sağ +, ±35° = ±1), z = ağız–burun mesafesi (m) |
+| AGX | `/joint_states` | head_node → robot_state_publisher: head_pan, head_tilt (rad); TF kameraları kafayla taşır |
 
 Hız önceliği: dock komutu teleop'tan önce gelir. Her iki komut da güvenlik kapısından geçer. Kapı açılışta kapalıdır: MCU'dan ilk mesaj gelene kadar acil durdurma basılı sayılır.
 
@@ -93,9 +106,9 @@ Telefon Yüzü R01 klasörü değiştirilmedi.
 ## Bilinen sınırlar ve sıradaki adımlar
 
 - **ROS 2 sürümü:** Xavier'de ROS 2 Humble yalnız Tier 3 düzeyinde destekleniyor ve konteynerde çalışıyor. Jazzy için Xavier'e hazır imaj yok.
-- **AprilTag düğümü:** bu pakette yok. `apriltag_ros` bağlanıp etiket ölçümü `/luna/dock/tag` topic'ine (PointStamped: x = yatay sapma, z = mesafe) yayımlanacak.
+- **AprilTag düğümü:** eklendi (`kamera-apriltag` dalı); ayrıntı aşağıda "Kamera ve AprilTag ile dock" bölümünde.
 - **SLAM ve navigasyon:** bağlanmadı. Sıradaki adaylar slam_toolbox ve Nav2; LiDAR verisi `laser` çerçevesinde hazır.
-- **USB kameralar:** Arducam UVC kameralar için `usb_cam` ya da `v4l2_camera` eklenecek.
+- **USB kameralar:** `usb_cam` ile yapılandırıldı (`config/cameras.yaml`); gerçek kamerayla denenmedi.
 - **Ses:** XVF3800'ün ses ve yön bilgisi bağlanmadı; yüzdeki `gaze` olayı buna da bağlanabilir.
 - **Ağır yapay zekâ işleri:** bulut Kimi 2.8 için ağ istemcisi henüz yok. Wi-Fi kartı donanım listesinde (K05).
 - **Kalibre edilecekler** (`config/luna.yaml`):
@@ -175,3 +188,184 @@ source install/setup.bash && ros2 launch luna_robot luna.launch.py
 ```
 
 Docker Desktop bozukken `docker pull`, kimlik yardımcısında (`credsStore`) takılabilir. O durumda imaj, içinde yalnız `{}` olan bir `config.json` bulunan boş bir dizinle çekilir: `DOCKER_CONFIG=<o dizin> DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker pull ros:humble-ros-base`.
+
+## Kamera ve AprilTag ile dock (17.10.2026, dal `kamera-apriltag`)
+
+Bu bölüm, mock'un sahte etiketinin yerine gerçek bir etiket hattı koyar: iki kafa kamerası → `apriltag_ros` → `dock_tag_node` → `/luna/dock/tag` → `dock_node`. Kafa döndüğünde de çalışır, çünkü etiket TF ile gövdeye (`base_link`) çevrilir.
+
+### Etiket
+
+- **Aile ve kimlik:** tag36h11, ID 0.
+- **Baskı ölçüsü:** siyah kare **48 mm** (8 hücre × 6 mm). Bir hücrelik beyaz halkayla birlikte 60 mm eder.
+- **Plaka:** REF_R02_TAG, 64 × 64 mm. Etiket ortalanınca her kenarda 2 mm kesim payı kalır.
+- **Neden 48 mm:** Plakaya beyaz halkasıyla sığabilecek en büyük etiket 51.2 mm olurdu, ama o zaman kesim payı hiç kalmaz. 6 mm'lik hücre hem yazdırması kolay hem de pay bırakıyor.
+- **`apriltag_ros` ayarı:** `size: 0.048`. Bu değer siyah karenin kenarıdır; beyaz halka dahil değildir.
+- **Baskı dosyası:** `docs/dock_tag36h11_id0_48mm.svg`. %100 ölçekle yazdırın ve siyah karenin kenarını cetvelle ölçüp 48 mm olduğunu doğrulayın. Kesik çizgi 64 mm'lik plaka sınırıdır.
+- **Desenin doğruluğu:** Bit deseni AprilRobotics `tag36h11.c` dosyasından alındı. Gerçek dedektör sentetik görüntülerde bu deseni ID 0 olarak çözdü.
+
+### Geometri (R02 CAD, oturmuş poz, `base_link` eksenleri)
+
+| Nokta | x | Kaynak |
+|---|---|---|
+| Etiket yüzü | 0.371 m, merkez yüksekliği 0.382 m | REF_R02_TAG Y−376..−371, Z350..414 |
+| Alıcı ağzı | 0.170 m | Y−170 |
+| Burun ucu | 0.154 m | R02_PF2_D01 Y−154; etiketin 0.217 m önünde |
+| Sol / sağ kamera optik merkezi | 0.034 m, y ±0.062, z 0.475 | R06 kamera modeli; giriş göz bebeği lens önünün 3 mm gerisinde |
+
+`/luna/dock/tag` şunları taşır:
+- **`x` (offset):** etiketin gövdeye göre yönü. Dönme merkezi `base_link`'tir; sağ pozitiftir. ±35° değeri ±1'e karşılık gelir ve değer ±1'de kırpılır. Mock ve `Dock.k_turn` aynı ölçekle ayarlı olduğu için durum makinesinde değişiklik gerekmedi.
+- **`z` (mesafe):** alıcı ağzından burun ucuna olan mesafe. Burun ağza değdiğinde 0 olur; robot tam oturduğunda **−0.016 m** olur, çünkü burun ağzın 16 mm içine girer. Robot dock'la aynı hizadayken bu değer kesindir; açılı yaklaşırken yaklaşıktır.
+- **Reddedilen tespitler:** etiket yüksekliği 0.382 ± 0.10 m dışındaysa ya da `base_link`'e uzaklık 0.25–3.0 m aralığının dışındaysa ölçüm yayımlanmaz.
+
+### Kameralar
+
+- **Sürücü:** `usb_cam`, 1280×720 MJPG, 15 fps (`config/cameras.yaml`).
+  - Arducam B0630, YUY2 biçimini en çok 640×480'de veriyor; 720p ve 1080p için MJPG gerekiyor. `usb_cam` MJPG'yi kendisi çözüyor (`mjpeg2rgb`, ffmpeg).
+  - 15 fps yeterli: `dock_node` etiketi 0.5 s görmezse kayıp sayıyor. Düşük kare hızı AprilTag'in işlemci yükünü de yarıya indiriyor.
+- **İç parametreler:** `config/camera_info/*.yaml` dosyaları **nominal**. Üreticinin verdiği 82° yatay açıdan hesaplandı: fx = 736 px, bozulma 0.
+  - Lensin bozulması üreticiye göre −13 %'e kadar çıkıyor. `camera_calibration` ile kalibre edilene kadar görüntü kenarlarına yakın ölçümlere güvenilmemeli.
+  - `apriltag_ros` şimdilik düzeltilmemiş (`image_raw`) görüntüyü alıyor.
+- **Odak:** B0630'un M12 lensi sabit odaklı; üreticiye göre 1 m ile sonsuz arası net.
+  - Dock sırasında etiket 0.37–1.4 m arasında görünüyor. Sentetik testte 3 px bulanıklıkla bile robot oturmuş pozdayken tespit edildi, ama gerçek kamerada bu denenmedi.
+  - Kaba hesap (f 3.7 mm, F2.5, karışıklık dairesi 2 piksel = 5.8 µm): hiperfokal mesafe ≈ 0.94 m. Lens elle ~0.6 m'ye odaklanırsa 0.37–1.65 m arası net kalır.
+- **Cihaz adları:** her kamera iki düğüm açar (`/dev/videoN` ve meta veri için N+1) ve numaralar takılma sırasına göre değişir. Kablolama bitince `config/cameras.yaml` ve `docker/compose.yaml` içinde `/dev/v4l/by-path/...` adları kullanılmalı.
+
+### Kafa dönüşü (pan) telafisi
+
+- `head_node` artık `/joint_states` yayımlıyor: `head_pan` ve `head_tilt` (rad). `robot_state_publisher` bunlarla TF'i günceller ve kameralar kafayla birlikte döner. Servolarda geri bildirim olmadığı için yayımlanan değer ölçüm değil, hız sınırlı komuttur.
+- **Yön kuralı (URDF eksenleri):** + pan robotun soluna, + tilt aşağıya. Kalibrasyonda `pan_direction` ve `tilt_direction` buna göre ayarlanmalı. Yanlış işaret, telafiyi ters çevirir.
+- `dock_tag_node` etiketi görüntünün zaman damgasında `base_link`'e çevirir. Böylece offset ve mesafe kafanın nereye baktığından bağımsız olur.
+- **Sınır:** Telafi, etiket kameralardan en az birinin görüntüsünde kaldıkça çalışır. Yatay yarım açı 41°. Robot etikete dönmüşken kafa yaklaşık ±35°'ye kadar çevrilebilir; daha fazlasında hizalanırken etiket görüntüden çıkar.
+
+### launch
+
+```bash
+ros2 launch luna_robot luna.launch.py                # tags:=mock — mock etiketi sahteler, kamera paketi gerekmez
+ros2 launch luna_robot luna.launch.py tags:=sim      # sim kamera → apriltag_ros → dock_tag_node (donanımsız)
+ros2 launch luna_robot luna.launch.py mock:=false    # tags:=usb — iki usb_cam → apriltag_ros → dock_tag_node
+```
+
+`tags:=sim` modunda:
+- mock MCU etiketi sahtelemez, yalnız gerçek pozunu `/luna/mock/truth` topic'ine yayımlar.
+- `sim_camera_node` bu pozdan ve TF'teki kafa pozundan iki kameranın 1280×720 görüntüsünü üretir: ışın izlemeyle, piksel başına 3×3 örnekle ve gürültü ekleyerek.
+- Kamera başına bir `apriltag_ros` düğümü çalışır. Etiket TF çerçeveleri `dock_tag_left` ve `dock_tag_right`'tır.
+
+### Doğrulananlar (17.10.2026)
+
+**Ortam:** Mac (Apple Silicon), colima ve yerel `luna-dev:humble-tag` imajı.
+- İmaj `docker/Dockerfile.dev` ile kuruldu: `ros:humble-ros-base` üstüne `ros-humble-apriltag-ros` 3.4.0 ve `ros-humble-usb-cam` 0.8.1. İndirme 209 MB oldu; imaj 2.15 GB, tabana göre +1.03 GB.
+- Konteyner `--shm-size=512m` ve `ROS_LOCALHOST_ONLY=1` ile çalıştırıldı.
+- Aşağıdaki sayılar VM boşken alındı. Kardeş oturumların konteynerleri VM'yi doldurduğunda (yük ortalaması ~20, 4 vCPU) mock'un kendi sahte etiketiyle bile dock 25 s'lik yaklaşma süresini aşıp geri çekildi; o koşular sayılmadı.
+
+| Kontrol | Sonuç |
+|---|---|
+| Birim testleri, `python3 -m unittest discover -s test` | Mac'te (Py 3.14) **63/63**, 1'i atlandı (numpy yok). Konteynerde (Py 3.10) ve `colcon test`'te **63/63**. `rosdep check` geçti |
+| `cd web && npm test` | **3/3**. Worktree'den çalıştırınca test, yüz çekirdeğini `../../Telefon Yüzü R01 2026-10-07` yolunda bulamıyor. Ana çalışma kopyasında ya da bu yolun doğru olduğu bir kopyada çalıştırılmalı |
+| Firmware host testleri (`firmware/luna_mcu/host_test/run.sh`) | **219 kontrol, 0 hata**, 17 test |
+| `tags:=usb` duman testi (kamera cihazı yok) | `usb_cam` ayarları okudu: kamera adı, 15 fps, `package://luna_robot/config/camera_info/...` URL'si. Ardından konteynerde `/sys/class/video4linux` olmadığı için beklendiği gibi düştü. `apriltag` düğümleri `tag.frames = [dock_tag_left]` ve `size = 0.048` ile açıldı. SIGINT'te diğer 9 süreç temiz kapandı |
+| Sentetik görüntü taraması (`tools/tag_sweep.py`), gerçek `apriltag_ros` ile | aşağıda |
+| Tam yığın, `tags:=sim` | aşağıda |
+
+**Sentetik görüntü taraması.**
+- **Sahne:** sol kameranın bilinen bir pozdan göreceği 1280×720 görüntü.
+- **Kamera pozunun kaynağı:** `core/frames.UrdfChain`.
+- **Ölçümün kaynağı:** `robot_state_publisher` → TF → `dock_tag_node` hattı. Kamera pozu ve ölçüm farklı yollardan geldiği için iki URDF yorumu da birbirine karşı denenmiş oldu.
+- **Yöntem:** her vakada 8 kare gönderildi.
+- **Karşılaştırma:** `/luna/dock/tag` gerçek offset ve mesafeyle, `/luna/dock/tag_position` etiketin gerçek `base_link` konumuyla karşılaştırıldı.
+
+| Grup (720p, `decimate: 2`, seçilen ayar) | Tespit | En büyük hata |
+|---|---|---|
+| Menzil 0–1.0 m (oturmuş poz dahil), hizalı, kafa düz | 72/72 | konum 8 mm, offset 0.002 |
+| Menzil 1.25–1.5 m | 16/16 | konum 10 mm |
+| Menzil 1.75–2.0 m | 16/16 | konum 22 mm |
+| Menzil 2.25 m / 2.5 m / 3.0 m | 5/8 / 0/8 / 0/8 | konum 50 mm (2.25 m) |
+| Yanal 0.05–0.3 m ve yaw −25..+20° | 48/48 | offset 0.003; konum 58 mm (1.5 m'de 0.3 m yanda, yaw −10°) |
+| Kafa pan ±20°, ±35° | 32/32 | konum 5 mm, offset 0.001 |
+| Robot dönük, kafa etikete çevrili (yaw 25° / pan −30°, yaw 45° / pan −50°) | 24/24 | konum 6 mm, offset 0.001 (45°'de beklendiği gibi +1'de kırpıldı) |
+| Tilt +10° (oturmuş), −10°, +12° | 24/24 | konum 4 mm |
+| Bulanıklık σ 1.5 ve 3 px (oturmuş), 1.5 px (0.3 m), 1 px (1.0 / 1.5 m) | 40/40 | konum 28 mm (1.5 m, σ 1 px) |
+
+- **Desen ve hat:** Dedektör sentetik deseni her vakada ID 0 olarak çözdü. 2.0 m'ye kadar bütün gruplarda **272/272** kare yayına ulaştı.
+- **Gecikme:** Görüntünün yayımlanmasından `/luna/dock/tag`'ın alınmasına kadar ortalama 37 ms. Bu değer Mac VM'de ölçüldü; Xavier'in değeri değildir.
+- **`decimate: 1` ile karşılaştırma:** 2.25 m ve 2.5 m'de 8/8, gecikme ~70 ms.
+- **1920×1080, `decimate: 2` ile karşılaştırma:** 2.5 m'de 8/8, konum hatası 13 mm, gecikme ~45 ms. 1080p, USB bant genişliği ve MJPG çözme yükü getiriyor; Xavier'de denenmedi.
+- **3.0 m:** Etiket her iki ayarda da görüldü ama yayımlanmadı, çünkü `base_link`'e uzaklık `max_range_m` (3.0 m) sınırının üstünde.
+- **Seçim:** 720p ve `decimate: 2`. Dock yaklaşması zaten ≤1.4 m'den başlıyor (`approach_timeout`). Daha uzaktan yakalamak gerekirse önce `decimate: 1` denenmeli.
+
+**Tam yığın, `ros2 launch luna_robot luna.launch.py tags:=sim`, mock MCU, 1.2 m'den otomatik dock.** Etiket yalnız sim kamera → `apriltag_ros` ×2 → `dock_tag_node` hattından geliyor. Gerçek son poz `/luna/mock/truth`'tan alındı.
+
+| Senaryo | Durumlar | `/luna/dock/tag` | Gerçek son poz |
+|---|---|---|---|
+| `tags:=mock` (karşılaştırma) | ALIGN → APPROACH 0.1 s → CONTACT 21.7 s → **CHARGING 22.7 s** | 49 Hz (mock) | x −0.1 mm, y 0.0 mm |
+| `tags:=sim`, düz | ALIGN 0.2 s → APPROACH 0.2 s → CONTACT 22.1 s → **CHARGING 23.1 s** | 19.7 Hz, en uzun boşluk 0.29 s | y −0.4 mm, yaw +0.02° |
+| `tags:=sim`, kafa +30° (`dock_watch.py --pan 30`) | SEEK → ALIGN 0.7 s → APPROACH 1.3 s → CONTACT 23.3 s → **CHARGING 24.3 s** | 13.9 Hz, offset −0.06..+0.11 | y −0.2 mm |
+| `tags:=sim`, robot 20° sola dönük başlıyor (`start_yaw_deg: 20`) | SEEK → ALIGN 0.2 s → APPROACH 1.3 s → CONTACT 23.2 s → **CHARGING 24.2 s** | 19.7 Hz, offset +0.64'ten 0'a | y −0.7 mm, yaw +0.07° |
+
+- SIGINT'le her `tags:=sim` koşusunda 10/10, `tags:=mock`'ta 6/6 süreç temiz kapandı. Dock sırasında `dock_tag_node` hiç TF hatası vermedi. Yalnız bir koşuda açılışta ve kapanışta birer uyarı çıktı: TF tamponu, ilk karenin zaman damgasından 7 ms sonra doluyordu; kapanışta da `head_node` önce durmuştu.
+- Kafa +30°'deyken etiket görüntüde 30° sağda duruyordu, yine de yayımlanan offset sıfır çevresinde kaldı. Telafi böylece doğrulandı.
+- Geçersiz `mock:=false tags:=sim` önce bir hata verip sahipsiz düğümler bırakıyordu: `OpaqueFunction` yükseldiğinde öndeki düğümler başlamıştı. Bu düğümlerden ikinci bir `dock_node` sonraki koşuda kendi durum makinesini çalıştırdı. Argüman denetimi artık hiçbir düğüm başlamadan yapılıyor; denendi, hiçbir süreç başlamadı.
+- Görülen bir başlangıç yarışı: Yeniden derlemeden sonraki ilk `tags:=sim` koşusunda dock, etiket hattı ısınmadan başladı. Robot SEEK'te 16.7 s dönüp etiketi yeniden buldu ve yine CHARGING'e ulaştı (40.6 s). Aynı senaryonun ikinci koşusu yukarıdaki satırdır.
+- İşlemci kullanımı, Mac VM, tek çekirdek oranıyla: `apriltag` düğümü başına ~%27, `sim_camera_node` ~%20, diğer düğümler ~%7. Xavier'de ölçülmedi.
+
+### Bulunan ve düzeltilen sorunlar
+
+- **TF'de kamera yoktu.**
+  - `head_pan` ve `head_tilt` revolute eklemlerdir; `robot_state_publisher` bunları `/joint_states` gelmeden yayımlamaz.
+  - Yığında bu topic'i yayımlayan yoktu, bu yüzden `base_link`'ten kafaya ve kameralara giden TF zinciri hiç oluşmuyordu.
+  - Düzeltme: `head_node` artık `/joint_states` yayımlıyor.
+- **Humble'da `TransformListener(spin_thread=True)` aynı düğümü ikinci bir yürütücüye ekliyor.**
+  - Belirti: Bir geri çağrının içinde zaman aşımlı `lookup_transform` beklenirken `/tf` mesajları işlenmedi. Hata "Lookup would require extrapolation into the future" idi.
+  - Etki: İlk taramada tespitlerin yaklaşık yarısı bu yüzden kayboldu. Menzil grubunda 112 karenin yalnız 61'i yayımlandı.
+  - Neden: `apriltag_ros` önce `detections`'ı, ardından etiketin `/tf`'ini yayımlıyor.
+  - Düzeltme: `dock_tag_node` artık beklemiyor. Tespitler en çok `tf_wait_s` (0.2 s) bir kuyrukta bekliyor; kuyruk, TF geldikçe 10 ms'lik bir zamanlayıcıyla boşalıyor. Zamanlayıcı yalnız kuyrukta tespit varken çalışıyor.
+- **Süreçler arası 720p görüntü Fast DDS'te 2.4 s'ye kadar takılıyordu.** Bu, robotu da ilgilendiren en önemli bulgu.
+  - Belirti: Tespit kendisi ~5–80 ms sürüyordu, ama tespitler kimi zaman 1–2.4 s gecikmeyle geliyordu. Dock eski bir açıyla dönüp salınıyor, sonra FAULT'a düşüyordu.
+  - Neden: Humble'ın paylaşımlı bellek segmenti 512 KB. 0.9 MB'lık görüntü UDP parçalarına bölünüyor; loopback'te kaybolan parçalar güvenilir QoS'ta yeniden gönderilmeyi bekliyor.
+  - Best-effort QoS ile gecikme 8–59 ms'ye indi, ama karelerin %45–70'i kayboldu.
+  - Düzeltme: `config/fastdds_large_images.xml`, 4 MB'lık SHM segmentli bir profil. Ölçüm (80 kare): kayıp 0, gecikme ortalama 11–67 ms, en çok 149 ms.
+  - Uygulanışı: `luna.launch.py` profili kamera hattı açıkken (`tags:=sim|usb`) ve kullanıcı başka bir profil vermediyse uyguluyor. Konteynerin `/dev/shm`'i en az 256 MB olmalı; `docker/compose.yaml`'a `shm_size: 512mb` eklendi.
+  - Robotta `usb_cam` rgb8 yayımlıyor; 720p bir kare 2.7 MB olduğu için sorun orada daha da büyük olurdu. Bu düzeltme Jetson'da denenmedi.
+  - Daha iyi bir çözüm, `usb_cam` ile `apriltag_ros`'u aynı bileşen konteynerinde süreç içi iletişimle çalıştırmak olurdu; bu yapılmadı.
+- **Python'dan büyük görüntü yayımlamak yavaştı.**
+  - Humble'ın mesaj sınıfı, `Image.data`'ya `bytes` verilince 921 600 baytın her birini Python'da tek tek denetliyor.
+  - Etki: Sim kamera kamera başına yalnız ~1.3 kare/s üretebiliyordu.
+  - Düzeltme: veri `array.array('B', ...)` olarak veriliyor. Önceden üretilmiş gürültü kareleri de bu süreyi kısalttı.
+
+### Doğrulanmayanlar
+
+- **Gerçek kameralar.** `usb_cam` bir cihazla hiç çalıştırılmadı: MJPG çözme, 15 fps, pozlama ve `/dev/video*` adları denenmedi. B0630'un UVC denetimlerinin (`v4l2-ctl`) adları da bilinmiyor; `config/cameras.yaml` bunları kameranın kendi değerinde bırakıyor (`-1`).
+- **Kalibrasyon.** Lensin gerçek iç parametreleri ve bozulması bilinmiyor; düzeltilmiş (`image_rect`) görüntü yok. Sentetik görüntüler ideal pinhole ile üretildi. Bu yüzden yukarıdaki doğruluk sayıları, gerçek lensle elde edilecek doğruluğun üst sınırıdır.
+- **Görüntü koşulları.** Gerçek ışık, parlama, hareket bulanıklığı, baskı kalitesi ve plakanın rengi denenmedi. Gerçek odak bulanıklığı da denenmedi; sentetik bulanıklık yalnız Gauss bulanıklığı.
+- **Jetson.** `docker/Dockerfile`'a apriltag ve usb_cam kaynakları eklendi, ama Jetson imajı **derlenmedi**. dustynv imajında `cv_bridge`, `image_transport` ve `camera_info_manager` bulunduğu varsayıldı. Xavier'de iki kamera, MJPG çözme ve AprilTag'in işlemci yükü ölçülmedi.
+- **Kafa servolarının yönü.** + pan'ın gerçekten sola döndürdüğü kalibrasyonda doğrulanmalı (`pan_direction`).
+
+### Bilinen sınırlar
+
+- **Dock eksenine hizalanma yok.** Durum makinesi etikete yöneliyor, dock eksenine oturmuyor.
+  - Robot eksenin 15 cm yanından başlarsa dock'a açılı varıyor ve mock'un 2 cm'lik ağız toleransını kaçırıyor. 3 denemeden sonra FAULT'a düşüyor (test: `test_start_beside_the_dock_axis_is_not_docked_by_bearing_alone`).
+  - 5 cm yandan başlarsa ve 20° dönük başlarsa dock'luyor.
+  - Bu sınır etiket hattından değil, `core/dock.py`'deki durum makinesinden geliyor. Çözüm için etiketin yönü (yaw) ya da dock ekseni üstünde önde bir hedef nokta kullanılabilir. Küçük etikette yaw belirsizliği (planar ambiguity) bunu zorlaştırıyor.
+- **Kafa çok dönükse etiket kaybolur.** Kafa ±35°'ye kadar çevrilmişken dock'luyor; 40°'de etiket görüntüden çıkıyor ve dock başarısız oluyor (birim testi, B0630 720p modeli).
+- **Menzil.** `decimate: 2` ile etiket güvenilir olarak 2.0 m'ye kadar görülüyor (2.25 m'de 5/8).
+- **`max_age_s` = 0.3 s.** İki kameranın tespitleri yalnız bu kadar yakın zamanlıysa birleştiriliyor.
+
+### Tekrarlamak için
+
+Mac'te, depo kökü "Yazılım R01 2026-10-16":
+
+```bash
+docker --context colima build -t luna-dev:humble-tag -f docker/Dockerfile.dev docker
+docker --context colima run --rm -it -v "$PWD/luna_ws/src/luna_robot:/src/luna_robot:ro" luna-dev:humble-tag bash
+```
+
+Konteynerde:
+
+```bash
+source /opt/ros/humble/setup.bash && export ROS_LOCALHOST_ONLY=1
+mkdir -p /ws/src && cp -r /src/luna_robot /ws/src/ && cd /ws && colcon build && source install/setup.bash
+cd /ws/src/luna_robot
+ros2 launch tools/sweep.launch.py decimate:=2.0 &
+python3 tools/tag_sweep.py --out /tmp/sweep.json         # sentetik görüntü taraması
+ros2 launch luna_robot luna.launch.py tags:=sim &          # (taramayı kapattıktan sonra) tam yığın
+python3 tools/dock_watch.py --seconds 45 [--pan 30]
+```

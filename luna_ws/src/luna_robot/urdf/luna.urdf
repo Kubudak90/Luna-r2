@@ -28,9 +28,17 @@
     <axis xyz="0 1 0"/><limit lower="-0.209" upper="0.209" effort="2.0" velocity="0.78"/>
   </joint>
   <link name="camera_left_link"/>
-  <joint name="camera_left_joint" type="fixed"><parent link="head_tilt_link"/><child link="camera_left_link"/><origin xyz="0.040 0.062 0.010"/></joint>
+  <!-- R06 camera model (Arducam B0630): lens front Y−37, entrance pupil taken 3 mm behind it (the R06 FOV apex)
+       → x 0.034 in base_link, 0.064 ahead of the tilt axis; lens centre Z475 and CAD X +62 for camera_left
+       (REF_R06_CAM_R), X −62 for camera_right (REF_R06_CAM_L).
+       *_optical_frame: ROS camera convention (z out of the lens, x right, y down), the frame_id of the images. -->
+  <joint name="camera_left_joint" type="fixed"><parent link="head_tilt_link"/><child link="camera_left_link"/><origin xyz="0.064 0.062 0.010"/></joint>
+  <link name="camera_left_optical_frame"/>
+  <joint name="camera_left_optical_joint" type="fixed"><parent link="camera_left_link"/><child link="camera_left_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
   <link name="camera_right_link"/>
-  <joint name="camera_right_joint" type="fixed"><parent link="head_tilt_link"/><child link="camera_right_link"/><origin xyz="0.040 -0.062 0.010"/></joint>
+  <joint name="camera_right_joint" type="fixed"><parent link="head_tilt_link"/><child link="camera_right_link"/><origin xyz="0.064 -0.062 0.010"/></joint>
+  <link name="camera_right_optical_frame"/>
+  <joint name="camera_right_optical_joint" type="fixed"><parent link="camera_right_link"/><child link="camera_right_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
 
   <!-- RPLIDAR C1 placeholder scan plane Z580 (R05 LiDAR check); real optical height to be verified -->
   <link name="laser"/>

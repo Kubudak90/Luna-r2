@@ -1,0 +1,20 @@
+# apriltag_ros (christianrauch/apriltag_ros 3.x) for the dock tag: one node per head camera in /camera_left and
+# /camera_right; the launch file adds tag.frames = [dock_tag_<cam>] so the two cameras publish different TF frames.
+# Dock tag: tag36h11 ID 0, black square 48 mm (= size), printed with its white ring 60 mm on the 64 mm plate.
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.048
+    max_hamming: 0
+    detector:
+      threads: 2
+      decimate: 2.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    pose_estimation_method: pnp
+    tag:
+      ids: [0]
+      sizes: [0.048]

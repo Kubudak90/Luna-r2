@@ -1,6 +1,13 @@
-"""Pan/tilt head: degree targets → slew-limited servo pulse widths for the MCU, plus gaze for the face."""
+"""Pan/tilt head: degree targets → slew-limited servo pulse widths for the MCU, plus gaze for the face and
+/joint_states for robot_state_publisher, so TF carries the cameras with the head.
+
+Angles follow the URDF axes: + pan turns the head to the robot's left (head_pan +z), + tilt pitches it down
+(head_tilt +y). The servos have no feedback, so the joint states are the slew-limited command, not a measurement."""
+import math
+
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
 
 from . import topics as T
@@ -19,6 +26,7 @@ class HeadNode(Node):
         self.create_subscription(Vector3, T.HEAD_TARGET, lambda m: self.head.set_target(m.x, m.y), 10)
         self.pub_us = self.create_publisher(Float32MultiArray, T.MCU_HEAD_US, 10)
         self.pub_gaze = self.create_publisher(Vector3, T.HEAD_GAZE, 10)
+        self.pub_joints = self.create_publisher(JointState, T.JOINT_STATES, 10)
         self.dt = 0.02
         self.create_timer(self.dt, self._tick)
 
@@ -27,6 +35,9 @@ class HeadNode(Node):
         self.pub_us.publish(Float32MultiArray(data=[pan_us, tilt_us]))
         gx, gy = self.head.gaze()
         self.pub_gaze.publish(Vector3(x=gx, y=gy, z=0.0))
+        js = JointState(name=['head_pan', 'head_tilt'], position=[math.radians(a) for a in self.head.state])
+        js.header.stamp = self.get_clock().now().to_msg()
+        self.pub_joints.publish(js)
 
 
 def main():
