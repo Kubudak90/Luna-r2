@@ -45,11 +45,12 @@ Teensy ile AGX arasındaki topic'lerin tek kaynağı `luna_robot/topics.py`. `fi
 | Yön | Topic | Tip |
 |---|---|---|
 | MCU → | `/luna/mcu/wheels` | Float32MultiArray [sol rad, sağ rad, sol rad/s, sağ rad/s] |
-| MCU → | `/luna/mcu/bumpers` · `/estop` · `/dock_sense` | UInt8 bit maskesi · Bool · Bool |
+| MCU → | `/luna/mcu/bumpers` · `/estop` · `/dock_sense` | UInt8 bit maskesi · Bool · Bool (robot beslenen dock'a oturdu, P4 kimliği) |
 | MCU → | `/luna/mcu/cliff` · `/corners` | Float32MultiArray (m) |
 | MCU → | `/luna/mcu/battery` | sensor_msgs/BatteryState (BMS UART) |
 | → MCU | `/luna/mcu/wheel_target` | [sol rad/s, sağ rad/s, pwm_cap] |
 | → MCU | `/luna/mcu/head_us` | [pan µs, tilt µs] |
+| → MCU | `/luna/mcu/charge_enable` | Bool: false = DOCK_INHIBIT, dock kontakları söndürür. `false` 1 s geçerli; `dock_node` 20 Hz yayımlar. Mesaj yoksa şarj serbest |
 | AGX | `/cmd_vel`, `/luna/dock/request` (dock/undock/cancel), `/luna/head/target` | |
 
 Hız önceliği: dock komutu teleop'tan önce gelir. Her iki komut da güvenlik kapısından geçer. Kapı açılışta kapalıdır: MCU'dan ilk mesaj gelene kadar acil durdurma basılı sayılır.
@@ -175,3 +176,34 @@ source install/setup.bash && ros2 launch luna_robot luna.launch.py
 ```
 
 Docker Desktop bozukken `docker pull`, kimlik yardımcısında (`credsStore`) takılabilir. O durumda imaj, içinde yalnız `{}` olan bir `config.json` bulunan boş bir dizinle çekilir: `DOCKER_CONFIG=<o dizin> DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker pull ros:humble-ros-base`.
+
+## Dock kimliği (P4) ve şarj izni (17.10.2026)
+
+Elektrik R01 (`../Elektrik R01 2026-10-17/README_TR.md` §3 ve §5) dock algılamayı kontak geriliminden P4 kimlik hattına taşıdı. Bu depoya iki parça halinde girdi.
+
+**1. Firmware yaması** (`firmware_yamasi.diff`, olduğu gibi uygulandı):
+- `lib/luna_core/src/dock_id.h`: P4 penceresi. Robot oturunca P4 2.50 V, inhibit'te 0.76 V.
+- `pins.h`: `DOCK_ID_ADC = 41`, `DOCK_INHIBIT = 35`.
+- `main.cpp`: `dock_sense` P4 skoruyla, 100 ms debounce'la hesaplanıyor.
+- `/luna/mcu/dock_sense` yine Bool; anlamı artık "robot beslenen dock'a oturdu".
+
+**2. Faz 2: şarj izni.**
+- **Topic:** yeni `/luna/mcu/charge_enable` (Bool, AGX → MCU), `topics.py` ve `topics.h`'te.
+- **Firmware:** `DOCK_INHIBIT = !data` uygular. `false` yalnız 1 s geçerli; agent koparsa pin hemen LOW olur. Varsayılan her durumda "şarj serbest".
+- **`core/dock.py`:** `Dock.charge_enable`, UNDOCK ve BACKOFF'ta false. Bu iki durumda robot önce 0.25 s yerinde durur (`release_s`), sonra eskisi gibi 2.5 s geri gider. Böylece dock kontakları akım altında ayrılmadan önce söner. BACKOFF da dahil, çünkü CONTACT'ta şarj akımı görülmezse (ör. BMS yok) robot oturmuş ve kontaklar enerjili hâlde geri çekilir.
+- **`dock_node`:** değeri her tikte yayımlar.
+- **Mock:** `mock_mcu_node` aboneliği `DockPlant.charge_enable`'a bağlar; `false`'ta şarj akımı keser. Gerçek firmware'deki 1 s sınırı mock'ta yok, son değer kalır.
+
+**Doğrulama (17.10.2026):**
+
+| Kontrol | Sonuç |
+|---|---|
+| `firmware/luna_mcu/host_test/run.sh` | **19 test / 246 kontrol** (yama sonrası 18/235, ardından `charge_enable lease` testi) |
+| `pio run -e teensy41` (ASCII scratch kopya) | **SUCCESS**, kendi kodumuzda uyarı yok; FLASH kodu 121 320 B, RAM1 değişken 38 048 B |
+| `PYTHONPATH=. python3 -m unittest discover -s test` (Mac, Py 3.14) | **41/41** (iki eski undock testi yerine iki yeni test) |
+| Docker `ros:humble-ros-base`, `colcon test` (Py 3.10) | **41/41** |
+| Docker canlı mock koşusu (CHARGING'den 3 s sonra `undock`) | `charge_enable` false ile şarj akımı aynı tikte kesildi; ilk geri tekerlek hızı **0.22 s** sonra; IDLE'da `charge_enable` yeniden true. `charge_enable` ~19.5 Hz geldi |
+
+Yeni testlerin ikisi de iki bozuk sürümde düşüyor: `charge_enable` hep true iken ve `release_s = 0` iken.
+
+**Gözlem (değiştirilmedi):** Mock SoC'u %24 olduğu için robot IDLE'a geçer geçmez `auto_dock` yüzünden yeniden dock'a yöneliyor. Düşük SoC'de kullanıcının `undock` isteği, pil politikası tarafından hemen geri alınıyor.

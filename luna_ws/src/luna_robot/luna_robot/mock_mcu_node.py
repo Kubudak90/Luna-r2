@@ -1,7 +1,8 @@
 """Mock Teensy: lets the whole stack run with no hardware. Same topics as the real micro-ROS firmware.
 
 Simulates (core/mock_plant.py): wheel motion (first-order lag), a dock 1.2 m ahead of the start pose with
-a visible tag, dock contact + charging and battery drain/charge."""
+a visible tag, dock contact + charging (off while /luna/mcu/charge_enable is false; the real MCU also drops
+a false after 1 s, the mock keeps the last value) and battery drain/charge."""
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
@@ -23,6 +24,7 @@ class MockMcu(Node):
                                            start_soc=p('start_soc').value, drain_w=p('drain_w').value))
         self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
         self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
+        self.create_subscription(Bool, T.MCU_CHARGE_ENABLE, lambda m: setattr(self.plant, 'charge_enable', m.data), 10)
         self.p_wheels = self.create_publisher(Float32MultiArray, T.MCU_WHEELS, 10)
         self.p_bump = self.create_publisher(UInt8, T.MCU_BUMPERS, 10)
         self.p_cliff = self.create_publisher(Float32MultiArray, T.MCU_CLIFF, 10)

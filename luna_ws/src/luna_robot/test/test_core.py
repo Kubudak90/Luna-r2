@@ -238,30 +238,43 @@ class Docking(unittest.TestCase):
                 self.assertEqual((d.state, d.retries), ('IDLE', 0))
                 self.assertEqual(set(out), {(0.0, 0.0)})              # no reversing off a dock it left
 
-    def test_undock_from_docked_reverses_then_idle(self):
-        d = Dock()
-        d.state = 'DOCKED'
-        d.request('undock')
-        self.assertEqual(d.state, 'UNDOCK')
-        lin, _ = d.step(Obs(dock_sense=True), 0.05)
-        self.assertLess(lin, 0)
-        self.run_to(d, Obs(), ticks=100)
-        self.assertEqual(d.state, 'IDLE')
-
-    def test_undock_reverses_then_idle(self):
-        d = Dock()
-        d.state = 'CHARGING'
-        d.request('undock')
-        lin, _ = d.step(Obs(), 0.05)
-        self.assertLess(lin, 0)
-        self.run_to(d, Obs(), ticks=100)
-        self.assertEqual(d.state, 'IDLE')
+    def test_backing_off_the_dock_releases_the_contacts_first(self):
+        # Elektrik R01 §5: charge_enable=false makes the MCU raise DOCK_INHIBIT and the dock switch the contacts
+        # off (~10 ms) before they slide apart, so they never break charge current. dock_node publishes
+        # charge_enable after every step.
+        cases = [('DOCKED', 'undock', Obs(dock_sense=True), 'IDLE'),
+                 ('CHARGING', 'undock', Obs(dock_sense=True, charging=True), 'IDLE'),
+                 ('CONTACT', None, Obs(dock_sense=True), 'SEEK')]       # seated, no charge current: retry
+        for start, request, obs, end in cases:
+            with self.subTest(start=start):
+                d = Dock()
+                d.state = start
+                self.assertTrue(d.charge_enable)
+                if request:
+                    d.request(request)
+                while d.state == start:
+                    d.step(obs, 0.05)
+                leaving = d.state
+                self.assertIn(leaving, ('UNDOCK', 'BACKOFF'))
+                self.assertFalse(d.charge_enable)
+                lin, published = [], []
+                while d.state == leaving:
+                    lin.append(d.step(obs, 0.05)[0])
+                    published.append(d.charge_enable)
+                first = next(i for i, v in enumerate(lin) if v < 0)
+                self.assertEqual(set(lin[:first]), {0.0})
+                self.assertGreaterEqual(first * 0.05, 0.2 - 1e-9)     # ≥ 0.2 s from the first false to reversing
+                self.assertLessEqual(first * 0.05, 0.3 + 1e-9)
+                self.assertFalse(any(published[:-1]))                  # false for the whole manoeuvre
+                self.assertAlmostEqual(sum(v < 0 for v in lin) * 0.05, d.cfg.backoff_time, delta=0.051)
+                self.assertEqual(d.state, end)
+                self.assertTrue(published[-1] and d.charge_enable)    # charging allowed again
 
 
 class DockingLoop(unittest.TestCase):
     """Dock state machine closed around the mock MCU plant at the node rates (dock 20 Hz, MCU 50 Hz)."""
 
-    def simulate(self, plant, dock, seconds):
+    def simulate(self, plant, dock, seconds, trace=None):
         states, ticks_per_dock = [], 0
         for i in range(int(seconds / 0.02)):
             if i * 0.02 >= ticks_per_dock * 0.05 - 1e-9:
@@ -271,7 +284,10 @@ class DockingLoop(unittest.TestCase):
                     obs.tag_offset, obs.tag_distance = tag
                 lin, ang = dock.step(obs, 0.05)
                 plant.target = list(K.twist_to_tracks(lin, ang))
+                plant.charge_enable = dock.charge_enable
                 states.append(dock.state)
+                if trace is not None:
+                    trace.append((plant.x, plant.charging))
                 ticks_per_dock += 1
             plant.step(0.02)
         return states
@@ -286,6 +302,21 @@ class DockingLoop(unittest.TestCase):
         soc = plant.soc
         self.assertEqual(set(self.simulate(plant, dock, seconds=10)), {'CHARGING'})   # contact holds
         self.assertGreater(plant.soc, soc)
+
+    def test_mock_undock_stops_charging_before_moving(self):
+        plant, dock = DockPlant(PlantConfig(dock_distance_m=1.2)), Dock()
+        dock.request('dock')
+        self.simulate(plant, dock, seconds=40)
+        self.assertEqual((dock.state, plant.charging), ('CHARGING', True))
+        x0, trace = plant.x, []
+        dock.request('undock')
+        self.simulate(plant, dock, seconds=5, trace=trace)
+        moved = next(i for i, (x, _) in enumerate(trace) if x < x0 - 1e-4)
+        self.assertGreaterEqual(moved * 0.05, 0.2 - 1e-9)             # held still ≥ 0.2 s ...
+        self.assertFalse(any(charging for _, charging in trace))       # ... with the contacts already dead
+        self.assertEqual(dock.state, 'IDLE')
+        self.assertTrue(dock.charge_enable)
+        self.assertLess(plant.x, x0 - 0.1)
 
 
 class Mood(unittest.TestCase):

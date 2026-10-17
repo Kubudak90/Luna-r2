@@ -22,6 +22,7 @@ class DockConfig:
     sense_loss_s: float = 0.2         # s of continuous DOCK_SENSE loss before contact counts as lost
     charge_loss_s: float = 1.0        # s without charge current before CHARGING parks as DOCKED (BMS: 5 Hz)
     backoff_time: float = 2.5
+    release_s: float = 0.25           # s still in BACKOFF/UNDOCK before reversing: ≥ 0.2 s after the first charge_enable=false
     max_retries: int = 3
 
 
@@ -43,6 +44,12 @@ class Dock:
     retries: int = 0
     lost: float = 0.0                 # s DOCK_SENSE has been continuously false in CONTACT/CHARGING/DOCKED
     uncharged: float = 0.0            # s charge current has been continuously absent in CHARGING
+
+    @property
+    def charge_enable(self):
+        """For /luna/mcu/charge_enable. False while leaving the dock on purpose: the MCU raises DOCK_INHIBIT and
+        the dock switches the contacts off (~10 ms) before they slide apart under charge current."""
+        return self.state not in ('BACKOFF', 'UNDOCK')
 
     def _go(self, state):
         self.state, self.t, self.lost, self.uncharged = state, 0.0, 0.0, 0.0
@@ -88,8 +95,8 @@ class Dock:
             speed = c.creep_speed if o.tag_distance < c.creep_distance else c.approach_speed
             return speed, -c.k_turn * o.tag_offset
         if s in ('CONTACT', 'CHARGING', 'DOCKED'):
-            # The MCU publishes one undebounced ADC read per tick, so contact bounce must not end the
-            # dock: only `sense_loss_s` of continuous loss counts, and any true sample restarts it.
+            # The MCU holds DOCK_SENSE through 100 ms of P4 dropouts, but a spring contact can bounce longer, so
+            # only `sense_loss_s` of continuous loss ends the dock, and any true sample restarts it.
             if not o.dock_sense:
                 self.lost += dt
                 if self.lost < c.sense_loss_s:
@@ -122,14 +129,11 @@ class Dock:
                 if self.uncharged >= c.charge_loss_s:
                     self._go('DOCKED')        # full or charger paused: stay parked
             return 0.0, 0.0
-        if s == 'BACKOFF':
-            if self.t >= c.backoff_time:
-                self._go('SEEK')
+        if s in ('BACKOFF', 'UNDOCK'):
+            if self.t < c.release_s:          # charge_enable is false: let the dock switch the contacts off
                 return 0.0, 0.0
-            return -c.approach_speed, 0.0
-        if s == 'UNDOCK':
-            if self.t >= c.backoff_time:
-                self._go('IDLE')
+            if self.t >= c.release_s + c.backoff_time:
+                self._go('SEEK' if s == 'BACKOFF' else 'IDLE')
                 return 0.0, 0.0
             return -c.approach_speed, 0.0
         raise AssertionError(s)

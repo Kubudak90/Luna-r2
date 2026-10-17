@@ -1,4 +1,5 @@
-"""Docking state machine + battery/power policy. Publishes a dock twist that the base node prefers while active."""
+"""Docking state machine + battery/power policy. Publishes a dock twist that the base node prefers while active,
+and /luna/mcu/charge_enable every tick (false while backing off the dock, so the contacts are dead first)."""
 import time
 
 from geometry_msgs.msg import PointStamped, Twist
@@ -31,6 +32,7 @@ class DockNode(Node):
         self.pub_state = self.create_publisher(String, T.DOCK_STATE, 10)
         self.pub_action = self.create_publisher(String, T.POWER_ACTION, 10)
         self.pub_mode = self.create_publisher(Int32, T.POWER_MODE_W, 10)
+        self.pub_charge = self.create_publisher(Bool, T.MCU_CHARGE_ENABLE, 10)
         self.dt = 0.05
         self.create_timer(self.dt, self._tick)
 
@@ -60,6 +62,7 @@ class DockNode(Node):
         self.pub_state.publish(String(data=self.dock.state))
         self.pub_action.publish(String(data=action))
         self.pub_mode.publish(Int32(data=mode_w))
+        self.pub_charge.publish(Bool(data=self.dock.charge_enable))   # the MCU drops a false after 1 s
 
 
 def main():

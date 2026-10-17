@@ -31,11 +31,12 @@ class DockPlant:
         self.wh = cfg.pack_wh * cfg.start_soc
         self.x = self.y = self.yaw = 0.0
         self.dist = cfg.dock_distance_m       # mouth-to-nose distance along +x
-        self.docked = False
+        self.docked = False                   # DOCK_SENSE: seated on the powered dock (P4 ID)
+        self.charge_enable = True             # /luna/mcu/charge_enable; false = DOCK_INHIBIT, contacts dead
 
     @property
     def charging(self):
-        return self.docked
+        return self.docked and self.charge_enable
 
     @property
     def soc(self):

@@ -7,12 +7,14 @@ MCU_BUMPERS = '/luna/mcu/bumpers'        # UInt8 bit0 FL, bit1 FR, bit2 BL, bit3
 MCU_CLIFF = '/luna/mcu/cliff'            # Float32MultiArray [FL, BL, FR, BR] metres, floor-facing VL53L4CD
 MCU_CORNERS = '/luna/mcu/corners'        # Float32MultiArray [FL, FR, BL, BR] metres, VL53L1X
 MCU_ESTOP = '/luna/mcu/estop'            # Bool, true = pressed (hardware already cut motor SLP)
-MCU_DOCK_SENSE = '/luna/mcu/dock_sense'  # Bool, charge voltage present on the contacts
+MCU_DOCK_SENSE = '/luna/mcu/dock_sense'  # Bool, robot seated on a powered dock (P4 ID)
 MCU_BATTERY = '/luna/mcu/battery'        # sensor_msgs/BatteryState from the BMS UART
 
 # Consumed by the MCU
 MCU_WHEEL_TARGET = '/luna/mcu/wheel_target'  # Float32MultiArray [left_rad_s, right_rad_s, pwm_cap]
 MCU_HEAD_US = '/luna/mcu/head_us'            # Float32MultiArray [pan_us, tilt_us]
+MCU_CHARGE_ENABLE = '/luna/mcu/charge_enable'  # Bool, false = DOCK_INHIBIT (dock switches the contacts off).
+                                               # A false lapses after 1 s and on agent loss: charging is the default
 
 # AGX-side
 CMD_VEL = '/cmd_vel'
