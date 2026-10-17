@@ -7,6 +7,7 @@
 
 #include "cliff.h"
 #include "debounce.h"
+#include "dock_id.h"
 #include "drive.h"
 #include "jbd_bms.h"
 
@@ -322,6 +323,55 @@ static void test_dock_debounce() {
   CHECK(w.update(16.0f, 0x00000030u));
 }
 
+static void test_p4_window() {
+  ThresholdDebounce d(P4_SCORE_ON, P4_SCORE_OFF, 100);
+  CHECK(!d.update(p4_score(2.50f, false), 0));
+  CHECK(d.update(p4_score(2.50f, false), 100));            // seated on a powered dock
+  CHECK(d.update(p4_score(2.38f, false), 150));            // tolerance corners stay inside
+  CHECK(d.update(p4_score(2.63f, false), 200));
+  CHECK(d.update(p4_score(3.15f, false), 300) && d.update(p4_score(3.15f, false), 900));   // hysteresis band
+  CHECK(d.update(p4_score(0.0f, false), 1000));            // one bad sample does not end it
+  CHECK(!d.update(p4_score(0.0f, false), 1100));           // 100 ms at 0 V → off the dock / dock unpowered
+  CHECK(!d.update(p4_score(3.15f, false), 1200) && !d.update(p4_score(3.15f, false), 1900));
+  ThresholdDebounce i(P4_SCORE_ON, P4_SCORE_OFF, 100);     // our own inhibit keeps "seated"
+  i.update(p4_score(2.50f, false), 0); i.update(p4_score(2.50f, false), 100);
+  CHECK(i.state());
+  CHECK(i.update(p4_score(2.50f, true), 110));             // P4 still settling (RC ~10 ms) when inhibit is set
+  CHECK(i.update(p4_score(0.76f, true), 130) && i.update(p4_score(0.72f, true), 400));
+  CHECK(i.update(p4_score(2.50f, false), 410));            // released again
+  ThresholdDebounce e(P4_SCORE_ON, P4_SCORE_OFF, 100);
+  e.update(p4_score(0.76f, false), 0);                     // inhibit level without our request
+  CHECK(!e.update(p4_score(0.76f, false), 200));
+  e.update(p4_score(3.30f, false), 300);                   // P1–P4 short: clamped to 3.3 V
+  CHECK(!e.update(p4_score(3.30f, false), 500));
+  CHECK(!e.update(p4_score(std::nanf(""), false), 700));   // NaN never docks
+  CHECK(!e.update(p4_score(std::nanf(""), false), 900));
+}
+
+static void test_charge_enable() {
+  ChargeEnable c(1000);
+  CHECK(!c.inhibit(0));                                    // default: charging allowed
+  c.on_msg(false, 100);
+  CHECK(c.inhibit(100) && c.inhibit(1099));                // dock_node asks before reversing
+  c.on_msg(false, 1050);                                   // refreshed every 50 ms keeps it
+  CHECK(c.inhibit(2049));
+  CHECK(!c.inhibit(2050));                                 // dock_node stopped sending: charging again
+  CHECK(!c.inhibit(2100));
+  c.on_msg(false, 3000);
+  c.on_msg(true, 3050);                                    // back to IDLE
+  CHECK(!c.inhibit(3060));
+  c.on_msg(false, 4000);
+  c.reset();                                               // micro-ROS agent lost
+  CHECK(!c.inhibit(4010));
+  c.on_msg(false, 4020);
+  CHECK(c.inhibit(4030));
+  ChargeEnable w(1000);                                    // millis() wrap-around
+  w.on_msg(false, 0xFFFFFF00u);
+  CHECK(w.inhibit(0x00000100u));
+  CHECK(!w.inhibit(0x00000300u));
+  CHECK(!w.inhibit(0xFFFFFF10u));                          // an expired false stays expired
+}
+
 static void test_cliff_retry() {
   CliffRetry r(2000, 2);
   bool dead[4] = {false, true, false, true};
@@ -467,6 +517,8 @@ int main() {
       {"battery monitor fail-safe + stale", test_battery_monitor_fail_safe},
       {"jbd cell voltages (0x04)", test_cell_frames},
       {"dock sense debounce", test_dock_debounce},
+      {"P4 dock ID window", test_p4_window},
+      {"charge_enable lease", test_charge_enable},
       {"cliff re-init policy", test_cliff_retry},
       {"cliff channel fail-safe", test_cliff_channel},
       {"drive stop conditions", test_drive_stops},

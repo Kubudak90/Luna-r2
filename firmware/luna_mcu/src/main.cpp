@@ -2,6 +2,7 @@
 // Safety layers: hardware E-stop cuts driver SLP and servo EN; this firmware also stops on
 // E-stop sense, on fault pins, when no wheel target arrives for 300 ms and while the micro-ROS
 // agent is unreachable; a 0.5 s hardware watchdog resets the MCU if the control loop hangs.
+// DOCK_INHIBIT follows /luna/mcu/charge_enable; charging is allowed unless the AGX keeps asking otherwise.
 #include <Arduino.h>
 #include <Servo.h>
 #include <Wire.h>
@@ -21,6 +22,7 @@
 #include "topics.h"
 #include "cliff.h"
 #include "debounce.h"
+#include "dock_id.h"
 #include "drive.h"
 #include "jbd_bms.h"
 
@@ -38,23 +40,25 @@ static VL53L4CD cliff_tof[4] = {VL53L4CD(&Wire1, XSHUT_CLIFF[0]), VL53L4CD(&Wire
 constexpr uint8_t CLIFF_ADDR8[4] = {0x80, 0x82, 0x84, 0x86};   // 7-bit 0x40..0x43
 constexpr uint32_t CLIFF_STALE_MS = 100, BMS_STALE_MS = 3000, BMS_POLL_MS = 250;
 constexpr uint32_t PING_MS = 500, TIME_SYNC_MS = 60000;
+constexpr uint32_t CHARGE_LEASE_MS = 1000;      // a charge_enable=false expires after this (dock_node: 20 Hz)
 static luna::CliffChannel cliff_ch[4] = {luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS),
                                          luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS)};
 static luna::CliffRetry cliff_retry(2000, 5);
 static luna::JbdParser bms_parser;
 static luna::BatteryMonitor bms(BMS_STALE_MS);
 static luna::DriveController ctl;
-static luna::ThresholdDebounce dock_sense(15.0f, 14.5f, 100);   // V at the contacts, 100 ms hold
+static luna::ThresholdDebounce dock_sense(luna::P4_SCORE_ON, luna::P4_SCORE_OFF, 100);   // P4 ID window, 100 ms hold
+static luna::ChargeEnable charge_enable(CHARGE_LEASE_MS);   // DOCK_INHIBIT request (Elektrik R01 README §5, Faz 2)
 static float head_us[2] = {1500, 1500};
 static bool motors_enabled = false;
 static uint32_t publish_errors = 0, last_sync_ms = 0;
 
 rcl_publisher_t p_wheels, p_bump, p_cliff, p_corner, p_estop, p_sense, p_batt;
-rcl_subscription_t s_target, s_head;
+rcl_subscription_t s_target, s_head, s_charge;
 std_msgs__msg__Float32MultiArray m_wheels, m_cliff, m_corner, m_target, m_head;
 static float b_wheels[4], b_cliff[4], b_corner[4], b_target[3], b_head[2], b_cells[luna::JBD_MAX_CELLS];
 std_msgs__msg__UInt8 m_bump;
-std_msgs__msg__Bool m_estop, m_sense;
+std_msgs__msg__Bool m_estop, m_sense, m_charge;
 sensor_msgs__msg__BatteryState m_batt;
 rclc_executor_t exec;
 rclc_support_t support;
@@ -101,9 +105,10 @@ static void stop_all() {
   motors_enabled = false;
 }
 
-// No agent: motors off, servo EN follows the E-stop, watchdog fed from loop().
+// No agent: motors off, charging allowed, servo EN follows the E-stop, watchdog fed from loop().
 static void hold_safe() {
   stop_all();
+  charge_enable.reset(); digitalWrite(DOCK_INHIBIT, LOW);
   digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
   watchdog_feed();
 }
@@ -119,6 +124,10 @@ static void on_head(const void *msg) {
   if (m->data.size < 2) return;
   head_us[0] = luna::clamp_finite(m->data.data[0], 1100.0f, 1900.0f, head_us[0]);   // ±60° mechanical window
   head_us[1] = luna::clamp_finite(m->data.data[1], 1420.0f, 1580.0f, head_us[1]);   // ±12°
+}
+
+static void on_charge(const void *msg) {
+  charge_enable.on_msg(((const std_msgs__msg__Bool *)msg)->data, millis());
 }
 
 static uint8_t read_bumpers() {
@@ -218,7 +227,9 @@ static void timer_cb(rcl_timer_t *, int64_t) {
   poll_cliff(rr); poll_cliff(rr + 1); rr = rr ? 0 : 2;
   retry_dead_cliff();
   poll_bms();
-  dock_sense.update(analogRead(VCHG_ADC) * (3.3f / 1023.0f) * VCHG_DIVIDER, millis());
+  const bool inhibit = charge_enable.inhibit(millis());
+  digitalWrite(DOCK_INHIBIT, inhibit ? HIGH : LOW);
+  dock_sense.update(luna::p4_score(analogRead(DOCK_ID_ADC) * (3.3f / 1023.0f), inhibit), millis());
   pan.writeMicroseconds((int)head_us[0]);
   tilt.writeMicroseconds((int)head_us[1]);
   digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
@@ -249,7 +260,7 @@ static void sync_time() {
 
 static bool create_entities() {
   p_wheels = p_bump = p_cliff = p_corner = p_estop = p_sense = p_batt = rcl_get_zero_initialized_publisher();
-  s_target = s_head = rcl_get_zero_initialized_subscription();
+  s_target = s_head = s_charge = rcl_get_zero_initialized_subscription();
   t_fast = rcl_get_zero_initialized_timer();
   node = rcl_get_zero_initialized_node();
   exec = rclc_executor_get_zero_initialized_executor();
@@ -266,11 +277,13 @@ static bool create_entities() {
   TRY(rclc_publisher_init_default(&p_batt, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), T_BATTERY));
   TRY(rclc_subscription_init_default(&s_target, &node, F, T_WHEEL_TARGET));
   TRY(rclc_subscription_init_default(&s_head, &node, F, T_HEAD_US));
+  TRY(rclc_subscription_init_default(&s_charge, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_CHARGE_ENABLE));
   TRY(rclc_timer_init_default(&t_fast, &support, RCL_MS_TO_NS(10), timer_cb));
-  TRY(rclc_executor_init(&exec, &support.context, 3, &alloc));
+  TRY(rclc_executor_init(&exec, &support.context, 4, &alloc));
   TRY(rclc_executor_add_timer(&exec, &t_fast));
   TRY(rclc_executor_add_subscription(&exec, &s_target, &m_target, &on_target, ON_NEW_DATA));
   TRY(rclc_executor_add_subscription(&exec, &s_head, &m_head, &on_head, ON_NEW_DATA));
+  TRY(rclc_executor_add_subscription(&exec, &s_charge, &m_charge, &on_charge, ON_NEW_DATA));
   sync_time();
   return true;
 }
@@ -282,6 +295,7 @@ static void destroy_entities() {
     ignore(rcl_publisher_fini(p, &node));
   ignore(rcl_subscription_fini(&s_target, &node));
   ignore(rcl_subscription_fini(&s_head, &node));
+  ignore(rcl_subscription_fini(&s_charge, &node));
   ignore(rcl_timer_fini(&t_fast));
   ignore(rclc_executor_fini(&exec));
   ignore(rcl_node_fini(&node));
@@ -305,7 +319,8 @@ static void init_cliff() {
 }
 
 void setup() {
-  for (int p : {M1_DIR, M2_DIR, DRV_SLP, SERVO_EN}) pinMode(p, OUTPUT);
+  for (int p : {M1_DIR, M2_DIR, DRV_SLP, SERVO_EN, DOCK_INHIBIT}) pinMode(p, OUTPUT);
+  digitalWrite(DOCK_INHIBIT, LOW);                // charging allowed (also the hardware default: 100k pull-down)
   for (int p : {ESTOP_SENSE, BUMP_FL, BUMP_FR, BUMP_BL, BUMP_BR, M1_FLT, M2_FLT}) pinMode(p, INPUT_PULLUP);
   analogWriteResolution(12);
   analogWriteFrequency(M1_PWM, 20000); analogWriteFrequency(M2_PWM, 20000);

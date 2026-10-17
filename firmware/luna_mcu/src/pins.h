@@ -25,7 +25,10 @@ constexpr int BUMP_FL = 2, BUMP_FR = 3, BUMP_BL = 4, BUMP_BR = 5;   // D2F-01L t
 constexpr int XSHUT_CORNER[4] = {6, 7, 8, 9};      // FL, FR, BL, BR
 constexpr int XSHUT_CLIFF[4] = {10, 11, 12, 33};   // FL, BL, FR, BR
 
-constexpr int VCHG_ADC = 40;         // A16, dock charge voltage via 47k/10k divider (16.8 V → 2.95 V)
+constexpr int VCHG_ADC = 40;         // A16, contact charge voltage via 47k/10k divider (16.8 V → 2.95 V); diagnostics only
 constexpr float VCHG_DIVIDER = (47.0f + 10.0f) / 10.0f;
+// Dock detection (Elektrik R01): P4 through 100k + 100 nF + BAT54S clamp; 2.50 V seated on a powered dock.
+constexpr int DOCK_ID_ADC = 41;      // A17
+constexpr int DOCK_INHIBIT = 35;     // HIGH asks the dock to switch the contacts off (AO3400A adds 2.2k on P4); 100k pull-down
 // I2C: Wire SDA 18 / SCL 19 (corners), Wire1 SDA1 17 / SCL1 16 (floor VL53L4CD).
 // BMS (JBD, 3.3 V TTL UART — confirm level on the chosen BMS) on Serial1: RX 0, TX 1.
