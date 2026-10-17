@@ -11,6 +11,10 @@ services:
       - /dev/ttyUSB0:/dev/ttyUSB0   # RPLIDAR C1 USB adapter
       - /dev/video0:/dev/video0     # head camera left  (config/cameras.yaml; use /dev/v4l/by-path names once wired)
       - /dev/video2:/dev/video2     # head camera right
+      - /dev/snd:/dev/snd           # XVF3800 microphones + speaker (ALSA)
+      - /dev/bus/usb:/dev/bus/usb   # XVF3800 control interface (DoA) via pyusb
+    environment:
+      - MOONSHOT_API_KEY            # passed through from the host shell if set; never write the key here
     command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true   # tags:=usb is the default here
   luna-mock:
     build: { context: .., dockerfile: docker/Dockerfile }

@@ -8,15 +8,16 @@ if a phone should show the face; events carry no personal data."""
 import json
 import queue
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
-from std_msgs.msg import String, UInt8
+from std_msgs.msg import Bool, Float32MultiArray, String, UInt8
 
 from . import topics as T
 from .entry import run
-from .core.face_mood import MoodMapper
+from .core.face_mood import MoodMapper, VoiceMood, pick_gaze, voice_state
 
 
 class Hub:
@@ -100,13 +101,42 @@ class FaceBridge(Node):
         self.create_subscription(UInt8, T.MCU_BUMPERS, lambda m: self._set('bumpers', m.data), 10)
         self.create_subscription(String, T.DOCK_STATE, lambda m: self._set('dock_state', m.data), 10)
         self.create_subscription(String, T.POWER_ACTION, lambda m: self._set('battery_action', m.data), 10)
-        self.create_subscription(Vector3, T.HEAD_GAZE, lambda m: self._set('gaze', (m.x, m.y)), 10)
+        self.create_subscription(Vector3, T.HEAD_GAZE, self._head_gaze, 10)
+        # Voice: eye gaze toward a voice wins over head gaze while fresh; listening / thinking / speaking become
+        # face events through VoiceMood (only the face core's existing vocabulary).
+        self.head_gaze, self.voice_gaze, self.voice_gaze_t = (0.0, 0.0), None, 0.0
+        self.heard_t, self.assistant, self.speaking = 0.0, 'idle', False
+        self.voice = VoiceMood()
+        self.create_subscription(Vector3, T.FACE_GAZE, self._voice_gaze, 10)
+        self.create_subscription(Float32MultiArray, T.AUDIO_DOA, self._doa, 10)
+        self.create_subscription(String, T.ASSISTANT_STATUS, lambda m: setattr(self, 'assistant', m.data), 10)
+        self.create_subscription(Bool, T.VOICE_SPEAKING, lambda m: setattr(self, 'speaking', m.data), 10)
+        self.create_timer(0.1, self._voice_tick)
         host, port = self.get_parameter('host').value, self.get_parameter('port').value
         handler = make_handler(self.hub, self.get_parameter('allowed_origin').value,
                                snapshot=lambda: MoodMapper.snapshot(**self.state))
         server = ThreadingHTTPServer((host, port), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.get_logger().info(f'face events on http://{host}:{port}/events')
+
+    def _head_gaze(self, msg):
+        self.head_gaze = (msg.x, msg.y)
+        self._set('gaze', pick_gaze(self.head_gaze, self.voice_gaze, time.monotonic() - self.voice_gaze_t))
+
+    def _voice_gaze(self, msg):
+        self.voice_gaze, self.voice_gaze_t = (msg.x, msg.y), time.monotonic()
+        self._set('gaze', self.voice_gaze)
+
+    def _doa(self, msg):
+        if len(msg.data) >= 2 and msg.data[1] > 0.5:
+            self.heard_t = time.monotonic()
+
+    def _voice_tick(self):
+        now = time.monotonic()
+        voice = voice_state(listening=now - self.heard_t < 0.5, thinking=self.assistant == 'thinking',
+                            speaking=self.speaking)
+        for event in self.voice.update(now, voice=voice, dock_state=self.state['dock_state']):
+            self.hub.send(event)
 
     def _set(self, key, value):
         self.state[key] = value

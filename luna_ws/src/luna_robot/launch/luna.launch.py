@@ -8,7 +8,10 @@ tags:= where /luna/dock/tag comes from (default: mock with mock:=true, usb with 
   sim   sim_camera_node renders the head cameras from the mock's true pose → apriltag_ros → dock_tag_node
   usb   the two Arducam head cameras (usb_cam) → apriltag_ros → dock_tag_node
 With sim:=true the 2D simulator replaces the mock MCU and publishes /luna/dock/tag itself, so tags:= must stay
-empty or mock."""
+empty or mock.
+Voice: voice:=false leaves out audio/attention/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival;
+use doa:=mock or voice:=false with mock:=true / sim:=true); cloud:=true is the owner's consent for the cloud
+assistant (it also needs a key, see config/luna.yaml)."""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -77,6 +80,7 @@ def generate_launch_description():
     mock = LaunchConfiguration('mock')
     sim = LaunchConfiguration('sim')
     lidar = LaunchConfiguration('lidar')
+    voice = IfCondition(LaunchConfiguration('voice'))
     actions = [
         DeclareLaunchArgument('mock', default_value='true'),
         DeclareLaunchArgument('sim', default_value='false', description='2D simulator instead of the mock MCU'),
@@ -88,6 +92,9 @@ def generate_launch_description():
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('tags', default_value='', description='mock | sim | usb (default: mock if mock:=true, else usb)'),
         OpaqueFunction(function=lambda context: _tags(context) and []),   # bad mock/tags: fail before any node starts
+        DeclareLaunchArgument('voice', default_value='true'),
+        DeclareLaunchArgument('doa', default_value='usb'),
+        DeclareLaunchArgument('cloud', default_value='false'),
         Node(package='robot_state_publisher', executable='robot_state_publisher', parameters=[{'robot_description': urdf}],
              prefix=IGNORE_LATE_SIGINT, exec_name='robot_state_publisher'),
         Node(package='luna_robot', executable='base_node', name='luna_base', parameters=[params]),
@@ -101,6 +108,12 @@ def generate_launch_description():
              condition=IfCondition(sim)),
         Node(package='micro_ros_agent', executable='micro_ros_agent', arguments=['serial', '--dev', LaunchConfiguration('mcu_port')],
              condition=IfCondition(PythonExpression(["'", mock, "' != 'true' and '", sim, "' != 'true'"]))),
+        Node(package='luna_robot', executable='audio_node', name='luna_audio', condition=voice,
+             parameters=[params, {'doa_source': ParameterValue(LaunchConfiguration('doa'), value_type=str)}]),
+        Node(package='luna_robot', executable='attention_node', name='luna_attention', parameters=[params], condition=voice),
+        Node(package='luna_robot', executable='assistant_node', name='luna_assistant', condition=voice,
+             parameters=[params, {'cloud_enabled': ParameterValue(LaunchConfiguration('cloud'), value_type=bool)}]),
+        Node(package='luna_robot', executable='speech_node', name='luna_speech', parameters=[params], condition=voice),
     ]
     try:  # Slamtec driver is optional so the mock stack runs without it
         sllidar = get_package_share_directory('sllidar_ros2')

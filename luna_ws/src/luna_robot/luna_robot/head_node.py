@@ -27,6 +27,7 @@ class HeadNode(Node):
         self.pub_us = self.create_publisher(Float32MultiArray, T.MCU_HEAD_US, 10)
         self.pub_gaze = self.create_publisher(Vector3, T.HEAD_GAZE, 10)
         self.pub_joints = self.create_publisher(JointState, T.JOINT_STATES, 10)
+        self.pub_state = self.create_publisher(Vector3, T.HEAD_STATE, 10)
         self.dt = 0.02
         self.create_timer(self.dt, self._tick)
 
@@ -38,6 +39,7 @@ class HeadNode(Node):
         js = JointState(name=['head_pan', 'head_tilt'], position=[math.radians(a) for a in self.head.state])
         js.header.stamp = self.get_clock().now().to_msg()
         self.pub_joints.publish(js)
+        self.pub_state.publish(Vector3(x=self.head.state[0], y=self.head.state[1], z=0.0))
 
 
 def main():

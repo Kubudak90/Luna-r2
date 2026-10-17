@@ -1,0 +1,116 @@
+"""Speaker output for assistant replies, with the text-to-speech engine left pluggable.
+
+The speaker (40 mm 4 Ω, front grille) hangs on the XVF3800's amplified speaker output, so audio is played to the
+array's ALSA card: that playback is also what its echo canceller hears as reference.
+
+Engines: NullTts (no voice, waits about as long as speaking would take, so listening/speaking states stay real)
+and CommandTts (any command line, e.g. espeak-ng or piper, optionally piped into aplay). Commands are split into
+argv once and the text is substituted as a whole argument: no shell, so a reply cannot inject commands."""
+import re
+import shlex
+import subprocess
+import threading
+from collections import deque
+
+_LINK = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+_URL = re.compile(r'https?://\S+')
+_MARK = re.compile(r'[*_`#>|~]+')
+_BULLET = re.compile(r'(?m)^\s*(?:[-+•]|\d+[.)])\s+')
+_SENTENCE = re.compile(r'(?<=[.!?…])\s+')
+
+
+def speakable(text, max_chars=400):
+    """Markdown and links out, whitespace collapsed, cut at the last sentence end that fits."""
+    t = _BULLET.sub('', _URL.sub('', _LINK.sub(r'\1', text or '')))
+    t = ' '.join(_MARK.sub('', t).split())
+    if len(t) <= max_chars:
+        return t
+    cut = t[:max_chars]
+    ends = [m.end() for m in re.finditer(r'[.!?…]', cut)]
+    return cut[:ends[-1]] if ends else cut
+
+
+def split_sentences(text):
+    return [s for s in _SENTENCE.split(text.strip()) if s]
+
+
+class SpeechQueue:
+    """Sentences waiting to be spoken; when full, the oldest are dropped (a stale answer is worse than a cut one)."""
+
+    def __init__(self, max_items=8):
+        self.items = deque(maxlen=max_items)
+        self.cond = threading.Condition()
+
+    def push(self, text):
+        with self.cond:
+            self.items.extend(split_sentences(text))
+            self.cond.notify()
+
+    def pop(self, timeout=None):
+        """Next sentence or None; waits up to `timeout` seconds when given."""
+        with self.cond:
+            if not self.items and timeout:
+                self.cond.wait(timeout)
+            return self.items.popleft() if self.items else None
+
+    def clear(self):
+        with self.cond:
+            self.items.clear()
+
+
+class NullTts:
+    def __init__(self, chars_per_s=14.0, sleep=None):
+        self.chars_per_s = chars_per_s
+        self._stop = threading.Event()
+        self._sleep = sleep or self._stop.wait
+
+    def say(self, text):
+        self._stop.clear()
+        self._sleep(len(text) / self.chars_per_s)
+
+    def stop(self):
+        self._stop.set()
+
+
+class CommandTts:
+    """synth: argv template with {text} (and optionally {device}); player: argv template reading the synth's
+    stdout (e.g. ['aplay', '-q', '-D', '{device}']), or None if the synth plays by itself."""
+
+    def __init__(self, synth, player=None, device='default', popen=subprocess.Popen, timeout_s=60.0):
+        self.synth, self.player, self.device, self.popen, self.timeout_s = synth, player, device, popen, timeout_s
+        self.procs = []
+        self.lock = threading.Lock()
+
+    def _argv(self, template, text):
+        return [a.replace('{text}', text).replace('{device}', self.device) for a in template]
+
+    def say(self, text):
+        if text.startswith('-'):
+            text = ' ' + text                  # never parsed as an option by the synth
+        with self.lock:
+            synth = self.popen(self._argv(self.synth, text), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE if self.player else subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.procs = [synth]
+            if self.player:
+                self.procs.append(self.popen(self._argv(self.player, text), stdin=synth.stdout,
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                if hasattr(synth.stdout, 'close'):
+                    synth.stdout.close()           # the player owns the pipe now; synth gets SIGPIPE if it dies
+        for p in reversed(self.procs):
+            try:
+                p.wait(timeout=self.timeout_s)
+            except subprocess.TimeoutExpired:
+                p.terminate()
+
+    def stop(self):
+        with self.lock:
+            for p in self.procs:
+                if p.poll() is None:
+                    p.terminate()
+
+
+def make_tts(engine, command='', player='', device='default'):
+    """engine 'none' → NullTts; 'command' → CommandTts from command-line strings (split here, not by a shell)."""
+    if engine == 'command' and command.strip():
+        return CommandTts(shlex.split(command), shlex.split(player) if player.strip() else None, device)
+    return NullTts()

@@ -1,0 +1,63 @@
+"""Speaker output: /luna/assistant/reply → text-to-speech → the XVF3800's speaker output; /luna/voice/speaking
+tells attention (own voice is not a speaker) and the face (speaking look).
+
+tts_engine: none    (default: no sound, but speaking lasts about as long as the sentence would)
+            command (tts_command / tts_player, split into argv without a shell; {text} and {device} filled in)"""
+import threading
+
+from rclpy.node import Node
+from std_msgs.msg import Bool, String
+
+from . import topics as T
+from .audio_node import alsa_device
+from .entry import run
+from .core.speech import SpeechQueue, make_tts, speakable
+
+
+class SpeechNode(Node):
+    def __init__(self):
+        super().__init__('luna_speech')
+        for name, default in [('tts_engine', 'none'), ('tts_command', 'espeak-ng -v tr --stdout {text}'),
+                              ('tts_player', 'aplay -q -D {device}'), ('alsa_device', 'auto'), ('max_chars', 400)]:
+            self.declare_parameter(name, default)
+        p = lambda n: self.get_parameter(n).value  # noqa: E731
+        device = alsa_device(p('alsa_device'))
+        self.tts = make_tts(p('tts_engine'), p('tts_command'), p('tts_player'), device)
+        self.max_chars = int(p('max_chars'))
+        self.queue = SpeechQueue()
+        self.speaking = False
+        self.pub_speaking = self.create_publisher(Bool, T.VOICE_SPEAKING, 10)
+        self.create_subscription(String, T.ASSISTANT_REPLY, self._reply, 10)
+        self.create_timer(0.2, lambda: self.pub_speaking.publish(Bool(data=self.speaking)))
+        threading.Thread(target=self._worker, daemon=True).start()
+        self.get_logger().info(f'TTS: {type(self.tts).__name__} on {device}')
+
+    def _reply(self, msg):
+        text = speakable(msg.data, self.max_chars)
+        if text:
+            self.queue.push(text)
+
+    def _set_speaking(self, value):
+        if value != self.speaking:
+            self.speaking = value
+            self.pub_speaking.publish(Bool(data=value))
+
+    def _worker(self):
+        while True:
+            sentence = self.queue.pop(timeout=0.2)
+            if sentence is None:
+                self._set_speaking(False)          # only once the queue is empty: no flicker between sentences
+                continue
+            self._set_speaking(True)
+            try:
+                self.tts.say(sentence)
+            except Exception as e:                  # a missing synth binary must not kill the node
+                self.get_logger().error(f'TTS failed: {e}')
+
+
+def main():
+    run(SpeechNode)
+
+
+if __name__ == '__main__':
+    main()

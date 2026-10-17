@@ -52,3 +52,21 @@ test('missing EventSource degrades quietly', () => {
   stop();
   assert.deepEqual(seen, ['unavailable']);
 });
+
+test('voice states reach the real face with existing events: listening looks curious, speaking looks happy', () => {
+  const face = createFaceCore({ seed: 3 });
+  const stop = connectRobot(face, { url: 'http://127.0.0.1:8765/events', EventSourceImpl: FakeSource });
+  const src = FakeSource.last;
+  face.step(1000);
+  src.emit({ type: 'curious' });              // core/face_mood.VoiceMood: listening, thinking
+  face.step(500);
+  assert.equal(face.sample().mode, 'curious');
+  src.emit({ type: 'stroke' });               // VoiceMood: speaking
+  face.step(500);
+  assert.equal(face.sample().mode, 'happy');
+  face.step(2_600);                           // the bridge re-sends before the reaction runs out
+  src.emit({ type: 'stroke' });
+  face.step(500);
+  assert.equal(face.sample().mode, 'happy');
+  stop();
+});

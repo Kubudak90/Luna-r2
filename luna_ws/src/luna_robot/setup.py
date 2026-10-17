@@ -33,6 +33,10 @@ setup(
             'sim_camera_node = luna_robot.sim_camera_node:main',
             'sim2d_node = luna_robot.sim2d_node:main',
             'dock_nav_node = luna_robot.dock_nav_node:main',
+            'audio_node = luna_robot.audio_node:main',
+            'attention_node = luna_robot.attention_node:main',
+            'assistant_node = luna_robot.assistant_node:main',
+            'speech_node = luna_robot.speech_node:main',
         ],
     },
 )
