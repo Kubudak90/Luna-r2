@@ -36,13 +36,18 @@ class MoodMapper:
 
     @staticmethod
     def snapshot(*, bumpers, dock_state, battery_action, gaze):
-        """Return the events that bring a freshly connected face to the current state. Pure: the live
-        mapper is not touched. Takes the same state as update(); only lasting state is replayed (asleep
-        on the dock, where Luna looks). Bumps, contact and a low battery are moments, already over."""
+        """Return the events that bring a connecting face to the current state. Pure: the live mapper is
+        not touched. Takes the same state as update(); only lasting state is replayed (asleep or awake,
+        where Luna looks). Bumps, contact and a low battery are moments, already over.
+
+        Off the dock the snapshot always starts with `wake`: a reconnecting page may still be asleep
+        from before the drop, and on an awake face `wake` only restarts its idle timer."""
         if dock_state in ('CHARGING', 'DOCKED'):
             ev = [{'type': 'sleep'}]
         else:
+            ev = [{'type': 'wake'}]
             x, y = round(gaze[0], 3), round(gaze[1], 3)
-            ev = [{'type': 'gaze', 'x': x, 'y': y}] if x or y else []   # a fresh face already looks ahead
+            if x or y:
+                ev.append({'type': 'gaze', 'x': x, 'y': y})        # after `wake`, which clears the gaze
         assert all(e['type'] in FACE_EVENTS for e in ev)
         return ev

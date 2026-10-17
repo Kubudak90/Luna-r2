@@ -75,6 +75,23 @@ class FaceBridgeHttp(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_face_reconnecting_after_undock_gets_wake(self):
+        # The face slept on the dock, lost the stream while Luna undocked and missed the live `wake`.
+        hub, port = Hub(), free_port()
+        state = {'bumpers': 0, 'dock_state': 'UNDOCK', 'battery_action': 'run', 'gaze': (0.2, 0.0)}
+        server = ThreadingHTTPServer(('127.0.0.1', port),
+                                     make_handler(hub, '*', snapshot=lambda: MoodMapper.snapshot(**state)))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            resp = urllib.request.urlopen(f'http://127.0.0.1:{port}/events', timeout=5)
+            self.assertEqual(resp.readline(), b'retry: 2000\n')
+            resp.readline()
+            self.assertEqual(resp.readline(), b'data: {"type":"wake"}\n')
+            resp.readline()
+            self.assertEqual(resp.readline(), b'data: {"type":"gaze","x":0.2,"y":0.0}\n')  # after wake, which clears gaze
+        finally:
+            server.shutdown()
+
     def test_unknown_path_is_404(self):
         hub, port = Hub(), free_port()
         server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, '*'))

@@ -305,14 +305,15 @@ class Mood(unittest.TestCase):
         for e in ev:
             self.assertIn(e['type'], FACE_EVENTS)
 
-    def test_snapshot_brings_fresh_face_to_current_state(self):
+    def test_snapshot_brings_connecting_face_to_current_state(self):
         m = MoodMapper()
         for dock in ('CHARGING', 'DOCKED'):
             ev = m.snapshot(bumpers=0, dock_state=dock, battery_action='charge', gaze=(0.4, 0.1))
             self.assertEqual(ev, [{'type': 'sleep'}])                # asleep on the dock, gaze ignored
         ev = m.snapshot(bumpers=1, dock_state='APPROACH', battery_action='seek_dock', gaze=(0.3, -0.2))
-        self.assertEqual(ev, [{'type': 'gaze', 'x': 0.3, 'y': -0.2}])  # tap/curious are moments, not state
-        self.assertEqual(m.snapshot(bumpers=0, dock_state='IDLE', battery_action='run', gaze=(0.0, 0.0)), [])
+        self.assertEqual(ev, [{'type': 'wake'}, {'type': 'gaze', 'x': 0.3, 'y': -0.2}])  # tap/curious are moments
+        ev = m.snapshot(bumpers=0, dock_state='IDLE', battery_action='run', gaze=(0.0, 0.0))
+        self.assertEqual(ev, [{'type': 'wake'}])                     # a face that slept before a drop wakes up
         ev = m.update(bumpers=0, dock_state='CHARGING', battery_action='charge', gaze=(0.0, 0))
         self.assertEqual(ev, [{'type': 'sleep'}])                    # snapshot left the live mapper untouched
 
