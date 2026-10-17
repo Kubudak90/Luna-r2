@@ -28,7 +28,10 @@ POWER_MODE_W = '/luna/power/mode_w'      # Int32: requested AGX nvpmodel budget 
 HEAD_STATE = '/luna/head/state'          # Vector3: x = pan deg, y = tilt deg, as commanded after the slew limit
 
 # Audio and voice (AGX-side; ReSpeaker XVF3800 under the head top shell, speaker on its amplified output)
-AUDIO_DOA = '/luna/audio/doa'            # Float32MultiArray [bearing deg head-relative (pan convention), speech 0/1, raw board deg]
+AUDIO_DOA = '/luna/audio/doa'            # Float32MultiArray [bearing deg in base_link (+ = left), speech 0/1, raw board deg,
+                                         #   head moving 0/1, bearing deg in the head]; speech is 0 while the head moves
+AUDIO_MUTE = '/luna/audio/mute'          # Bool command: true = mute the microphones (board buttons are inside the head)
+AUDIO_MUTED = '/luna/audio/muted'        # Bool state, 1 Hz and on change
 AUDIO_UTTERANCE = '/luna/audio/utterance'  # String: path of a finished utterance WAV (16 kHz mono) for a speech-to-text plug-in
 FACE_GAZE = '/luna/face/gaze'            # Vector3: eye gaze toward a voice, -1..1; the face prefers it to head gaze while fresh
 ASSISTANT_REQUEST = '/luna/assistant/request'  # String: what the person said (from speech-to-text, or typed for tests)

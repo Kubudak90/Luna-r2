@@ -1,5 +1,6 @@
 """Audio side without hardware: XVF3800 USB control against a fake device, PCM levels and utterance cutting,
-DoA → gentle head turn + eye gaze, and listening/thinking/speaking → face events.
+head-relative DoA → base_link bearing, mute and head-motion gating, DoA → gentle head turn + eye gaze, and
+listening/thinking/speaking → face events.
 Run from luna_ws/src/luna_robot:  python3 -m unittest discover -s test"""
 import math
 import os
@@ -14,7 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from luna_robot.core import xvf3800 as X  # noqa: E402
 from luna_robot.core.attention import Attention, AttentionConfig, MockSpeakers  # noqa: E402
-from luna_robot.core.audio import Segmenter, SegmenterConfig, UtteranceSpool, channel, rms_dbfs  # noqa: E402
+from luna_robot.core.audio import MicGate, Segmenter, SegmenterConfig, UtteranceSpool, channel, rms_dbfs  # noqa: E402
+from luna_robot.core.head_frame import base_to_head, head_to_base  # noqa: E402
 from luna_robot.core.face_mood import FACE_EVENTS, VoiceMood, pick_gaze, voice_state  # noqa: E402
 
 
@@ -25,6 +27,9 @@ class FakeXvf:
         self.values, self.busy, self.status, self.calls = values, busy, status, []
 
     def ctrl_transfer(self, bm_request_type, b_request, w_value, w_index, length, timeout):
+        if bm_request_type == X.REQ_OUT:                      # pyusb: the 5th argument is the payload for OUT
+            self.calls.append((bm_request_type, b_request, w_value, w_index, bytes(length)))
+            return len(length)
         self.calls.append((bm_request_type, b_request, w_value, w_index, length))
         if self.busy:
             self.busy -= 1
@@ -74,6 +79,15 @@ class Xvf3800Control(unittest.TestCase):
                  '                      Seeed Studio reSpeaker XVF3800 4-Mic Array at usb-3610000.xhci-2.1\n')
         self.assertEqual(X.find_alsa_device(cards), 'plughw:CARD=Array,DEV=0')
         self.assertIsNone(X.find_alsa_device(cards.splitlines()[0]))
+
+    def test_mute_writes_gpo_x0d30_and_reads_it_back(self):
+        # Seeed GPIO page: GPO servicer resid 20, GPO_WRITE_VALUE cmd 1 {pin 30, level}; high = mics muted + red LED.
+        dev = FakeXvf({(20, 0): bytes([0, 1, 0, 1, 0])})          # X0D11, X0D30, X0D31, X0D33, X0D39
+        ctl = X.XvfControl(dev)
+        ctl.set_mute(True)
+        ctl.set_mute(False)
+        self.assertEqual(dev.calls, [(X.REQ_OUT, 0, 1, 20, bytes([30, 1])), (X.REQ_OUT, 0, 1, 20, bytes([30, 0]))])
+        self.assertTrue(ctl.mute_pin())
 
     def test_open_usb_without_pyusb_is_a_clear_error(self):
         with self.assertRaisesRegex(X.XvfError, 'pyusb'):
@@ -126,6 +140,21 @@ class Segmenting(unittest.TestCase):
     def test_energy_vad_without_a_flag(self):
         self.assertEqual(len(self.feed(Segmenter(self.cfg), [0, 1, 1, 1, 1, 0, 0, 0], flag=False)), 1)
 
+    def test_hold_blocks_new_utterances_but_lets_a_started_one_finish(self):
+        seg, out = Segmenter(self.cfg), []
+        for _ in range(5):
+            out += seg.feed(tone(3277), speech=True, hold=True)      # servo noise flagged as speech while moving
+        self.assertEqual(out, [])
+        for voiced, hold in [(1, False), (1, False), (1, True), (1, True), (0, True), (0, True)]:
+            out += seg.feed(tone(3277 if voiced else 10), speech=bool(voiced), hold=hold)
+        self.assertEqual([len(u) for u in out], [100 + 400 + 200])
+
+    def test_reset_drops_the_utterance_in_progress(self):
+        seg = Segmenter(self.cfg)
+        self.feed(seg, [1, 1, 1])
+        seg.reset()
+        self.assertEqual(self.feed(seg, [0, 0, 0]), [])
+
     def test_spool_writes_wav_and_keeps_only_the_last(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, 'notes.txt'), 'w').close()        # not ours: never pruned
@@ -137,14 +166,14 @@ class Segmenting(unittest.TestCase):
 
 
 def follow(att, speaker_deg, seconds, t0=0.0, dt=0.05, head=None, speech=True, **kw):
-    """Run the attention loop with a speaker at a fixed body bearing; the head follows each command at once
-    (head_node slews at 90 °/s, faster than attention asks). Returns (outputs, time, head pan)."""
+    """Run the attention loop with a speaker at a fixed base_link bearing (audio_node has already turned the
+    head-relative DoA into it); the head follows each command at once (head_node slews at 90 °/s, faster than
+    attention asks). Returns (outputs, time, [pan, tilt])."""
     head = [0.0, 0.0] if head is None else head
     outs, t = [], t0
     for _ in range(int(round(seconds / dt))):
         t += dt
-        doa = None if speaker_deg is None else speaker_deg - head[0]          # the array turns with the head
-        out = att.update(t, doa_head_deg=doa, speech=speech and doa is not None, head_pan_deg=head[0], **kw)
+        out = att.update(t, bearing_deg=speaker_deg, speech=speech and speaker_deg is not None, **kw)
         if out.head_target is not None:
             head[:] = out.head_target
         outs.append(out)
@@ -185,7 +214,7 @@ class Attending(unittest.TestCase):
         att, cfg = Attention(), AttentionConfig()
         outs, t, head = follow(att, 40.0, 0.6)
         before = head[0]
-        out = att.update(t + 1.0, doa_head_deg=40.0 - head[0], speech=True, head_pan_deg=head[0])
+        out = att.update(t + 1.0, bearing_deg=40.0, speech=True)
         self.assertLessEqual(out.head_target[0] - before, cfg.turn_rate_deg_s * 0.1 + 1e-9)
 
     def test_holds_then_returns_to_centre_and_lets_go(self):
@@ -228,21 +257,120 @@ class Attending(unittest.TestCase):
         att, t, outs = Attention(), 0.0, []
         for i in range(60):
             t += 0.05
-            outs.append(att.update(t, doa_head_deg=90.0 if i % 2 else -90.0, speech=True))
+            outs.append(att.update(t, bearing_deg=90.0 if i % 2 else -90.0, speech=True))
         self.assertTrue(all(o.gaze is None for o in outs))
 
-    def test_head_relative_doa_adds_the_head_pan(self):
-        att, t, out = Attention(), 0.0, None
-        for _ in range(20):
-            t += 0.05
-            out = att.update(t, doa_head_deg=10.0, speech=True, head_pan_deg=30.0, dock_state='ALIGN')
-        self.assertAlmostEqual(out.gaze[0], round(40 / 60, 3))
+    def test_moving_head_freezes_what_attention_heard(self):
+        # Tilt servo ~49 mm from a mic (R07): while the head moves, DoA is not trusted and is not a pause either.
+        att = Attention()
+        outs, t, head = follow(att, 40.0, 2.0)
+        outs, t, head = follow(att, -60.0, 1.0, t0=t, head=head, head_moving=True)
+        self.assertTrue(all(o.gaze[0] == round(40 / 60, 3) for o in outs))
+        out = att.update(t + 0.05, bearing_deg=40.0, speech=True)
+        self.assertTrue(out.engaged)                   # no re-warm-up: the frozen second was not a gap
 
-    def test_mock_speakers_follow_a_script(self):
-        mock = MockSpeakers([(1.0, 2.0, 35.0)], period_s=10.0)
-        self.assertEqual(mock.sample(0.5, head_pan_deg=0.0), (None, False))
-        self.assertEqual(mock.sample(1.5, head_pan_deg=20.0), (15.0, True))      # head-relative, like the array
-        self.assertEqual(mock.sample(11.5, head_pan_deg=0.0), (35.0, True))
+    def test_mock_speakers_answer_like_the_head_mounted_array(self):
+        mock = MockSpeakers([(1.0, 2.0, 35.0)], period_s=10.0, elevation_deg=25.0)
+        self.assertEqual(mock.sample(0.5), (None, False))
+        az, speech = mock.sample(1.5, pan_deg=20.0, tilt_deg=8.0)
+        self.assertTrue(speech)
+        self.assertAlmostEqual(az, base_to_head(35.0, 25.0, 20.0, 8.0), places=9)
+        self.assertAlmostEqual(head_to_base(az, 20.0, 8.0, speaker_elevation_deg=25.0), 35.0, places=6)
+        self.assertEqual(mock.sample(11.5)[1], True)
+
+
+def wrap(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+class HeadFrame(unittest.TestCase):
+    """XVF3800 under the head top shell, logo up, turning with pan/tilt (R07): array azimuth → base_link.
+    pan + = left (URDF head_pan, +z); tilt + = nose up (head.py), i.e. URDF head_tilt joint = −tilt."""
+
+    def test_level_head_adds_pan_with_wrap_around(self):
+        for pan in (-60.0, -25.0, 0.0, 30.0, 60.0):
+            for az in (-170.0, -90.0, -10.0, 0.0, 45.0, 135.0, 179.0):
+                self.assertAlmostEqual(wrap(head_to_base(az, pan, 0.0, speaker_elevation_deg=0.0) - wrap(pan + az)), 0.0,
+                                       places=6)
+        self.assertAlmostEqual(head_to_base(170.0, 60.0, 0.0), -130.0, places=6)     # 230° → −130°
+        self.assertAlmostEqual(head_to_base(-150.0, -60.0, 0.0), 150.0, places=6)
+
+    def test_result_is_in_minus_180_to_180(self):
+        for az in range(-180, 181, 15):
+            for pan in (-60, 60):
+                for tilt in (-12, 12):
+                    b = head_to_base(float(az), float(pan), float(tilt))
+                    self.assertTrue(-180.0 < b <= 180.0, b)
+
+    def test_joint_angles_are_held_to_the_head_limits(self):
+        self.assertAlmostEqual(head_to_base(10.0, 75.0, 0.0), head_to_base(10.0, 60.0, 0.0), places=9)
+        self.assertAlmostEqual(head_to_base(10.0, -80.0, 0.0), head_to_base(10.0, -60.0, 0.0), places=9)
+        self.assertAlmostEqual(head_to_base(45.0, 0.0, 30.0), head_to_base(45.0, 0.0, 12.0), places=9)
+        self.assertAlmostEqual(head_to_base(45.0, 0.0, -30.0), head_to_base(45.0, 0.0, -12.0), places=9)
+
+    def test_tilt_matters_off_the_tilt_axis_only(self):
+        # For a voice in the array plane the tilt axis (head left/right) is unchanged; straight ahead stays ahead
+        # at any height. A raised voice heard at exactly 90° on a nose-up head is really a little behind.
+        self.assertAlmostEqual(head_to_base(90.0, 0.0, 12.0, speaker_elevation_deg=0.0), 90.0, places=6)
+        self.assertAlmostEqual(head_to_base(0.0, 0.0, 12.0), 0.0, places=6)
+        self.assertGreater(head_to_base(90.0, 0.0, 12.0, speaker_elevation_deg=25.0), 90.0)
+        self.assertNotAlmostEqual(head_to_base(45.0, 0.0, 12.0, speaker_elevation_deg=0.0), 45.0, places=1)
+
+    def test_round_trip_through_the_tilted_array_is_exact(self):
+        for pan in (-60.0, 0.0, 35.0, 60.0):
+            for tilt in (-12.0, -4.0, 0.0, 4.0, 12.0):
+                for az in (-150.0, -60.0, -5.0, 20.0, 89.0, 160.0):
+                    measured = base_to_head(az, 25.0, pan, tilt)
+                    self.assertAlmostEqual(wrap(head_to_base(measured, pan, tilt, speaker_elevation_deg=25.0) - az), 0.0,
+                                           places=6)
+
+    def test_unknown_speaker_height_costs_a_few_degrees(self):
+        # A planar array cannot see elevation; 25° (a standing or sitting adult a metre or two away) is assumed.
+        worst = 0.0
+        for el in range(0, 41, 5):
+            for tilt in (-12.0, -6.0, 0.0, 6.0, 12.0):
+                for az in range(-180, 180, 5):
+                    measured = base_to_head(float(az), float(el), 0.0, tilt)
+                    worst = max(worst, abs(wrap(head_to_base(measured, 0.0, tilt, speaker_elevation_deg=25.0) - az)))
+        self.assertLess(worst, 6.0)                     # under attention's 12° deadband
+
+
+class Gating(unittest.TestCase):
+    def head(self, gate, t0, seconds, rate_deg_s, start=0.0, dt=0.02):
+        pan, t = start, t0
+        for _ in range(int(round(seconds / dt))):
+            t += dt
+            pan += rate_deg_s * dt
+            gate.head(t, pan, 0.0)
+        return t, pan
+
+    def test_head_motion_pauses_speech_until_it_settles(self):
+        gate = MicGate()
+        t, pan = self.head(gate, 0.0, 0.5, 0.0)
+        self.assertTrue(gate.speech(t, True))
+        t, pan = self.head(gate, t, 0.5, 30.0, start=pan)          # attention turning the head
+        self.assertTrue(gate.moving(t))
+        self.assertFalse(gate.speech(t, True))
+        self.assertFalse(gate.may_start_utterance(t))
+        t, pan = self.head(gate, t, 0.2, 0.0, start=pan)           # command stopped, servo still settling
+        self.assertTrue(gate.moving(t))
+        t, pan = self.head(gate, t, 0.3, 0.0, start=pan)
+        self.assertFalse(gate.moving(t))
+        self.assertTrue(gate.speech(t, True))
+
+    def test_tiny_jitter_is_not_motion(self):
+        gate, t = MicGate(), 0.0
+        for i in range(100):
+            t += 0.02
+            gate.head(t, 0.01 * (i % 2), 0.0)
+        self.assertFalse(gate.moving(t))
+
+    def test_mute_silences_everything(self):
+        gate = MicGate(muted=True)
+        self.assertFalse(gate.speech(1.0, True))
+        self.assertFalse(gate.may_start_utterance(1.0))
+        gate.muted = False
+        self.assertTrue(gate.speech(1.0, True))
 
 
 class VoiceFace(unittest.TestCase):

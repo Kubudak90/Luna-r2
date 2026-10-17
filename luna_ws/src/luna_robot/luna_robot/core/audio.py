@@ -1,5 +1,6 @@
 """Microphone PCM helpers: pick one channel of the XVF3800 stream, measure its level and cut it into utterances
-for a speech-to-text plug-in. Signed 16-bit little-endian PCM (ALSA S16_LE), standard library only."""
+for a speech-to-text plug-in, and gate listening by mute and head motion. Signed 16-bit little-endian PCM
+(ALSA S16_LE), standard library only."""
 import math
 import os
 import sys
@@ -46,12 +47,20 @@ class Segmenter:
         self.cur = None
         self.voiced = self.silence = 0
 
-    def feed(self, chunk, speech=None):
+    def reset(self):
+        """Drop everything, including an utterance in progress (mute)."""
+        self.pre.clear()
+        self.pre_n = 0
+        self.cur = None
+        self.voiced = self.silence = 0
+
+    def feed(self, chunk, speech=None, hold=False):
+        """hold: no new utterance may start (head moving: servo noise); one already started runs to its end."""
         cfg, n = self.cfg, len(chunk)
         voiced = rms_dbfs(chunk) > cfg.energy_dbfs if speech is None else speech
         out = []
         if self.cur is None:
-            if not voiced:
+            if not voiced or hold:
                 self.pre.append(chunk)
                 self.pre_n += n
                 while self.pre and self.pre_n - len(self.pre[0]) >= cfg.pre_roll_s * cfg.rate:
@@ -74,6 +83,40 @@ class Segmenter:
                 out.append(self.cur)
             self.cur = None
         return out
+
+
+@dataclass(frozen=True)
+class MicGateConfig:
+    moving_deg_s: float = 2.0       # head pan or tilt command faster than this = moving
+    settle_s: float = 0.3           # the servo lags its command and is still audible after it stops
+
+
+class MicGate:
+    """When Luna may listen. Muted (software mute; the board's buttons are inside the head, R07): never.
+    Head moving (the tilt servo is ~49 mm from one mic, R07) and settle_s after: the speech flag and DoA are not
+    trusted and no new utterance starts. head() takes /luna/head/state (pan, tilt deg) samples."""
+
+    def __init__(self, cfg=MicGateConfig(), muted=False):
+        self.cfg, self.muted = cfg, muted
+        self.last = None
+        self.moving_until = -1.0
+
+    def head(self, now, pan_deg, tilt_deg):
+        if self.last is not None:
+            t, pan, tilt = self.last
+            dt = now - t
+            if dt > 0 and max(abs(pan_deg - pan), abs(tilt_deg - tilt)) / dt > self.cfg.moving_deg_s:
+                self.moving_until = now + self.cfg.settle_s
+        self.last = (now, pan_deg, tilt_deg)
+
+    def moving(self, now):
+        return now < self.moving_until
+
+    def speech(self, now, speech):
+        return bool(speech) and not self.muted and not self.moving(now)
+
+    def may_start_utterance(self, now):
+        return not self.muted and not self.moving(now)
 
 
 class UtteranceSpool:

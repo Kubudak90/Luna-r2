@@ -4,8 +4,9 @@ The eyes go to the voice at once; the head follows slowly (turn_rate_deg_s, well
 and only for a voice clearly off to the side (deadband_deg). Eye gaze uses the head gaze convention
 (pan / pan limit, -tilt / tilt limit), so when attention lets go the face is already where head gaze points.
 
-Bearings are body-relative degrees in the head pan convention. The array turns with the head (R07: under the
-head top shell), so a body bearing is head pan + array DoA.
+Bearings are base_link degrees (+ = left, the head pan convention). The array turns with the head (R07: under
+the head top shell); audio_node turns its head-relative DoA into base_link with core/head_frame.py first.
+While the head moves (servo noise next to a mic, R07) attention freezes what it heard: no update, no pause.
 
 Who moves the head when:
 - On the dock (CHARGING, DOCKED) Luna sleeps: no reaction.
@@ -16,7 +17,7 @@ Attention publishes head targets only while it is using the head and until the h
 import math
 from dataclasses import dataclass, field
 
-from .xvf3800 import wrap_deg
+from .head_frame import base_to_head
 
 
 @dataclass(frozen=True)
@@ -63,16 +64,19 @@ class Attention:
         self.ema = [0.0, 0.0]
         self.speech_start = self.last_speech = None
 
-    def update(self, now, *, doa_head_deg=None, speech=False, head_pan_deg=0.0, dock_state='IDLE', self_speaking=False):
+    def update(self, now, *, bearing_deg=None, speech=False, dock_state='IDLE', self_speaking=False, head_moving=False):
         c = self.cfg
         # dt is capped: after a stalled timer (CPU load) the head catches up gently instead of jumping.
         dt = 0.0 if self.last_t is None else max(0.0, min(0.1, now - self.last_t))
         self.last_t = now
         asleep = dock_state in c.sleep_states
-        hearing = bool(speech) and doa_head_deg is not None and not self_speaking and not asleep
+        hearing = bool(speech) and bearing_deg is not None and not self_speaking and not asleep
         engaged = False
-        if hearing:
-            b = math.radians(wrap_deg(head_pan_deg + doa_head_deg))
+        if head_moving and not asleep:
+            if self.last_speech is not None:
+                self.last_speech = now                 # frozen: the moving time is neither speech nor a pause
+        elif hearing:
+            b = math.radians(bearing_deg)
             a = 1.0 - math.exp(-dt / c.smoothing_s)
             self.ema = [self.ema[0] + a * (math.cos(b) - self.ema[0]), self.ema[1] + a * (math.sin(b) - self.ema[1])]
             self.last_speech = now
@@ -112,15 +116,16 @@ class Attention:
 
 
 class MockSpeakers:
-    """Scripted voices for running without the array: [(start_s, duration_s, body_bearing_deg)] repeating every
-    period_s. sample() answers like the array would: head-relative bearing and speech flag."""
+    """Scripted voices for running without the array: [(start_s, duration_s, base_bearing_deg)] repeating every
+    period_s, at elevation_deg. sample() answers like the head-mounted array would: azimuth in the head frame
+    for the current pan/tilt, and the speech flag."""
 
-    def __init__(self, script, period_s=20.0):
-        self.script, self.period_s = script, period_s
+    def __init__(self, script, period_s=20.0, elevation_deg=25.0):
+        self.script, self.period_s, self.elevation_deg = script, period_s, elevation_deg
 
-    def sample(self, now, head_pan_deg=0.0):
+    def sample(self, now, pan_deg=0.0, tilt_deg=0.0):
         t = now % self.period_s
         for start, duration, bearing in self.script:
             if start <= t < start + duration:
-                return wrap_deg(bearing - head_pan_deg), True
+                return base_to_head(bearing, self.elevation_deg, pan_deg, tilt_deg), True
         return None, False

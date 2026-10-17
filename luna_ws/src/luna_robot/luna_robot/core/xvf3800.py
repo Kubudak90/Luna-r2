@@ -37,7 +37,10 @@ PARAMS = {
     'AEC_AZIMUTH_VALUES': Param(33, 75, 16, '<4f'),             # rad: beam 1, beam 2, free-running, auto-select
     'AEC_SPENERGY_VALUES': Param(33, 80, 16, '<4f'),            # speech energy, same beam order
     'AUDIO_MGR_SELECTED_AZIMUTHS': Param(35, 11, 8, '<2f'),     # rad: processed DoA (NaN = no speech), auto beam
+    'GPO_READ_VALUES': Param(20, 0, 5, '<5B'),                  # levels of X0D11, X0D30, X0D31, X0D33, X0D39
+    'GPO_WRITE_VALUE': Param(20, 1, 2, '<2B'),                  # {pin, level}
 }
+MUTE_PIN = 30            # X0D30: mic mute + red mute LED, high = muted (Seeed "xvf3800 xiao gpio" page, I2C)
 
 
 class XvfError(Exception):
@@ -74,6 +77,21 @@ class XvfControl:
     def doa(self):
         azimuth, speech = self.read('DOA_VALUE')
         return DoaReading(azimuth % 360, bool(speech))
+
+    def write(self, name, *values):
+        p = PARAMS[name]
+        payload = struct.pack(p.fmt, *values)
+        sent = self.dev.ctrl_transfer(REQ_OUT, 0, p.cmdid, p.resid, payload, self.timeout_ms)
+        if sent != len(payload):
+            raise XvfError(f'{name}: wrote {sent} of {len(payload)} bytes')
+
+    def set_mute(self, muted):
+        """Hardware mute through the mute GPO. The resid/cmd pair is documented for I2C; USB control uses the same
+        servicer ids in Seeed's Python example, but this write was not tried on a board."""
+        self.write('GPO_WRITE_VALUE', MUTE_PIN, 1 if muted else 0)
+
+    def mute_pin(self):
+        return bool(self.read('GPO_READ_VALUES')[1])
 
 
 def wrap_deg(a):
