@@ -28,6 +28,10 @@ setup(
             'dock_node = luna_robot.dock_node:main',
             'face_bridge_node = luna_robot.face_bridge_node:main',
             'mock_mcu_node = luna_robot.mock_mcu_node:main',
+            'audio_node = luna_robot.audio_node:main',
+            'attention_node = luna_robot.attention_node:main',
+            'assistant_node = luna_robot.assistant_node:main',
+            'speech_node = luna_robot.speech_node:main',
         ],
     },
 )

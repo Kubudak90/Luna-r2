@@ -19,6 +19,7 @@ class HeadNode(Node):
         self.create_subscription(Vector3, T.HEAD_TARGET, lambda m: self.head.set_target(m.x, m.y), 10)
         self.pub_us = self.create_publisher(Float32MultiArray, T.MCU_HEAD_US, 10)
         self.pub_gaze = self.create_publisher(Vector3, T.HEAD_GAZE, 10)
+        self.pub_state = self.create_publisher(Vector3, T.HEAD_STATE, 10)
         self.dt = 0.02
         self.create_timer(self.dt, self._tick)
 
@@ -27,6 +28,7 @@ class HeadNode(Node):
         self.pub_us.publish(Float32MultiArray(data=[pan_us, tilt_us]))
         gx, gy = self.head.gaze()
         self.pub_gaze.publish(Vector3(x=gx, y=gy, z=0.0))
+        self.pub_state.publish(Vector3(x=self.head.state[0], y=self.head.state[1], z=0.0))
 
 
 def main():

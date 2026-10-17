@@ -3,6 +3,10 @@
 # NOT BUILT in this delivery (needs a Jetson or an arm64 L4T build host).
 FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
 
+# Voice: arecord/aplay for the XVF3800, pyusb for its DoA control interface (NOT BUILT, see README_TR.md).
+RUN apt-get update && apt-get install -y --no-install-recommends alsa-utils python3-usb \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /opt/luna_ws
 RUN mkdir -p src && cd src \
  && git clone --depth 1 -b humble https://github.com/micro-ROS/micro_ros_setup.git \

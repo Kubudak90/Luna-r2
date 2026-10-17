@@ -22,6 +22,53 @@ luna_face_bridge:
     port: 8765
     allowed_origin: http://127.0.0.1:4173
 
+luna_audio:                  # ReSpeaker XVF3800 under the head top shell (R07)
+  ros__parameters:
+    doa_source: usb          # usb | mock | off  (launch: doa:=...)
+    doa_rate_hz: 10.0
+    doa_zero_deg: 0.0        # CALIBRATE: board azimuth for a voice straight ahead of the face
+    doa_direction: 1         # CALIBRATE: -1 if the board counts against the pan direction
+    capture: false           # microphone capture into utterance WAVs (records people: off by default)
+    alsa_device: auto        # auto = the XVF3800 card from /proc/asound/cards
+    rate: 16000
+    channels: 2              # Seeed USB firmware v2.x: 2 channels at 16 kHz (6-channel firmware differs)
+    capture_channel: 0       # CALIBRATE: which channel carries the processed (ASR) beam on this firmware
+    utterance_dir: /tmp/luna_utterances
+    keep_utterances: 5
+
+luna_attention:
+  ros__parameters:
+    max_pan_deg: 50.0        # head limit is ±60°, tilt ±12° (core/head.py); attention stays inside
+    listen_tilt_deg: 4.0     # CALIBRATE: look slightly up at a standing person
+    turn_rate_deg_s: 30.0
+    deadband_deg: 12.0
+    min_speech_s: 0.3
+    hold_s: 4.0
+
+luna_assistant:
+  ros__parameters:
+    cloud_enabled: false     # owner's consent; launch: cloud:=true. Without it nothing leaves the robot.
+    provider: kimi
+    base_url: https://api.moonshot.ai/v1
+    model: kimi-k2.6         # "Kimi 2.8" is not in the official model list (2026-10-17): confirm the ID
+    api_key_env: MOONSHOT_API_KEY
+    api_key_file: ~/.config/luna/moonshot_api_key   # outside the repo, chmod 600; never commit a key
+    extra_body_json: '{"thinking": {"type": "disabled"}}'
+    max_completion_tokens: 300
+    timeout_s: 15.0
+    deadline_s: 30.0
+    retries: 2
+    history_turns: 6
+    speak_offline_replies: true
+
+luna_speech:
+  ros__parameters:
+    tts_engine: none         # none | command  (none: silent, keeps the speaking state realistic)
+    tts_command: espeak-ng -v tr --stdout {text}   # example only: espeak-ng is not installed in the image
+    tts_player: aplay -q -D {device}
+    alsa_device: auto
+    max_chars: 400
+
 luna_mock_mcu:
   ros__parameters:
     start_soc: 0.24          # below the 25 % seek threshold: the mock docks by itself

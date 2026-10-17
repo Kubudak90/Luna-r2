@@ -1,5 +1,7 @@
 """Luna bringup.  ros2 launch luna_robot luna.launch.py            (mock MCU, no hardware)
-               ros2 launch luna_robot luna.launch.py mock:=false  (Teensy over micro-ROS + RPLIDAR C1)"""
+               ros2 launch luna_robot luna.launch.py mock:=false  (Teensy over micro-ROS + RPLIDAR C1)
+Voice: voice:=false leaves out audio/attention/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival);
+cloud:=true is the owner's consent for the cloud assistant (it also needs a key, see config/luna.yaml)."""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -9,6 +11,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 # Starts a C++ node with SIGINT ignored. rclcpp still installs its own handler, and puts SIG_IGN back when it shuts
 # down, so a second SIGINT during teardown can't kill the node with -2. launch sends that second SIGINT when stdin
@@ -23,11 +26,15 @@ def generate_launch_description():
         urdf = f.read()
     mock = LaunchConfiguration('mock')
     lidar = LaunchConfiguration('lidar')
+    voice = IfCondition(LaunchConfiguration('voice'))
     actions = [
         DeclareLaunchArgument('mock', default_value='true'),
         DeclareLaunchArgument('lidar', default_value='false'),
         DeclareLaunchArgument('mcu_port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0'),
+        DeclareLaunchArgument('voice', default_value='true'),
+        DeclareLaunchArgument('doa', default_value='usb'),
+        DeclareLaunchArgument('cloud', default_value='false'),
         Node(package='robot_state_publisher', executable='robot_state_publisher', parameters=[{'robot_description': urdf}],
              prefix=IGNORE_LATE_SIGINT, exec_name='robot_state_publisher'),
         Node(package='luna_robot', executable='base_node', name='luna_base', parameters=[params]),
@@ -37,6 +44,12 @@ def generate_launch_description():
         Node(package='luna_robot', executable='mock_mcu_node', name='luna_mock_mcu', parameters=[params], condition=IfCondition(mock)),
         Node(package='micro_ros_agent', executable='micro_ros_agent', arguments=['serial', '--dev', LaunchConfiguration('mcu_port')],
              condition=UnlessCondition(mock)),
+        Node(package='luna_robot', executable='audio_node', name='luna_audio', condition=voice,
+             parameters=[params, {'doa_source': ParameterValue(LaunchConfiguration('doa'), value_type=str)}]),
+        Node(package='luna_robot', executable='attention_node', name='luna_attention', parameters=[params], condition=voice),
+        Node(package='luna_robot', executable='assistant_node', name='luna_assistant', condition=voice,
+             parameters=[params, {'cloud_enabled': ParameterValue(LaunchConfiguration('cloud'), value_type=bool)}]),
+        Node(package='luna_robot', executable='speech_node', name='luna_speech', parameters=[params], condition=voice),
     ]
     try:  # Slamtec driver is optional so the mock stack runs without it
         sllidar = get_package_share_directory('sllidar_ros2')

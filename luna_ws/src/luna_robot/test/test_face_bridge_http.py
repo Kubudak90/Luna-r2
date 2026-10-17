@@ -15,7 +15,7 @@ for name in ['rclpy', 'rclpy.node', 'rclpy.executors', 'geometry_msgs', 'geometr
     sys.modules.setdefault(name, types.ModuleType(name))
 sys.modules['rclpy.node'].Node = object
 sys.modules['rclpy.executors'].ExternalShutdownException = type('ExternalShutdownException', (Exception,), {})
-for mod, names in [('geometry_msgs.msg', ['Vector3']), ('std_msgs.msg', ['String', 'UInt8'])]:
+for mod, names in [('geometry_msgs.msg', ['Vector3']), ('std_msgs.msg', ['Bool', 'Float32MultiArray', 'String', 'UInt8'])]:
     for n in names:
         setattr(sys.modules[mod], n, type(n, (), {}))
 

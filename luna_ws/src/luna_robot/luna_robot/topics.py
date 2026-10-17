@@ -25,3 +25,13 @@ HEAD_GAZE = '/luna/head/gaze'            # Vector3: x, y normalised -1..1
 SAFETY = '/luna/safety'                  # String: last gate reason
 POWER_ACTION = '/luna/power/action'      # String: unknown (no BMS yet) | run | seek_dock | critical | charge | overtemp
 POWER_MODE_W = '/luna/power/mode_w'      # Int32: requested AGX nvpmodel budget (10 / 15 / 30 W)
+HEAD_STATE = '/luna/head/state'          # Vector3: x = pan deg, y = tilt deg, as commanded after the slew limit
+
+# Audio and voice (AGX-side; ReSpeaker XVF3800 under the head top shell, speaker on its amplified output)
+AUDIO_DOA = '/luna/audio/doa'            # Float32MultiArray [bearing deg head-relative (pan convention), speech 0/1, raw board deg]
+AUDIO_UTTERANCE = '/luna/audio/utterance'  # String: path of a finished utterance WAV (16 kHz mono) for a speech-to-text plug-in
+FACE_GAZE = '/luna/face/gaze'            # Vector3: eye gaze toward a voice, -1..1; the face prefers it to head gaze while fresh
+ASSISTANT_REQUEST = '/luna/assistant/request'  # String: what the person said (from speech-to-text, or typed for tests)
+ASSISTANT_REPLY = '/luna/assistant/reply'      # String: text to speak (cloud answer or offline fallback)
+ASSISTANT_STATUS = '/luna/assistant/status'    # String: idle | thinking | ok | offline:<reason>
+VOICE_SPEAKING = '/luna/voice/speaking'  # Bool: the speaker is playing Luna's voice

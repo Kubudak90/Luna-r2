@@ -13,3 +13,8 @@ luna_ws/log/
 
 # web
 node_modules/
+
+# secrets: API keys live outside the repo (see luna.yaml luna_assistant); these patterns are a second guard
+.env
+*.key
+*api_key*
