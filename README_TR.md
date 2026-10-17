@@ -642,3 +642,19 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 - **Mute durumu dışarıdan görünmüyor:** kart düğmesinin (GPI X1D09) okunması belgelerde çelişkili (Seeed sayfası iki farklı okuma veriyor), okunmadı. Robotun kendisi de susturulduğunu yüzde göstermiyor; kırmızı LED kafa içinde kalıyor, kabuktaki LED deliklerinden görünüp görünmeyeceği bilinmiyor.
 - **Söz kesme (barge-in):** Luna konuşurken kişi konuşmaya başlarsa susmuyor.
 - **`/luna/head/target` tek sahipli değil:** kamera/takip düğümleri de kafayı sürecekse bir öncelik düzenleyici gerekir. Şu an yalnız dikkat düğümü yayımlıyor, o da yalnız kafayı kullandığı sürece.
+
+## Birleştirme sonrası doğrulama (17.10.2026)
+
+`kamera-apriltag`, `slam-nav2` ve `ses-bulut` dalları `main`'e birleştirildi (`4dcd138`, `0ad059b`, `a7494ec`).
+
+| Kontrol | Sonuç |
+|---|---|
+| Mac `unittest` (Py 3.14) | 204 OK, 7 atlandı (numpy/PyYAML yok) |
+| Docker `luna-nav:humble`, `colcon test` (Py 3.10) | **204 test, 0 hata, 0 atlanan** |
+| Web (`npm test`) · firmware host testleri | 4/4 · 19 test / 246 kontrol |
+| Canlı mock yığını (`mock:=true doa:=mock`, SoC %24) | Kendiliğinden dock'a girdi, **56,7 s'de CHARGING** (bir BACKOFF ile). Bağlanan yüze `sleep`. Ses düğümleri ayakta. Ctrl-C (süreç grubuna SIGINT) 2 s'de temiz |
+| SLAM haritalama senaryosu (`sim_nav_check.py mapping`) | **Bu ortamda doğrulanamadı: 10/17.** Robot 0,15 m/s'ye çıkamadı; TF "geleceğe uzanma" hataları, "Controller patience exceeded". Yük 4 çekirdekte 23–29 |
+
+- **Neden birleştirme hatası sayılmadı:** birleştirilmemiş `slam-nav2` dalı aynı colima VM'sinde (4 CPU / 8 GB) daha da kötü sonuç verdi (5/7; controller_server heartbeat kaybı). SLAM oturumu 17/17 sonuçlarını ayrı ve daha güçlü `luna-nav` VM'sinde almıştı; o VM artık yok.
+- **Yapılacak:** senaryo daha çok çekirdekli bir VM'de (ör. 8 CPU) ya da Jetson'da yeniden koşulmalı.
+- **Deneme betiği notu:** etkileşimsiz bir kabukta `ros2 launch … &` SIGINT'i yok sayarak başlar ve `kill -INT` onu durdurmaz. Betikte `set -m` açılıp SIGINT süreç grubuna (`kill -INT -PID`) gönderilmeli.
