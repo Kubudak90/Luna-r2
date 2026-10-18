@@ -704,33 +704,40 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 **A/B sonuçları** (Docker `luna-nav:humble`, colima 8 CPU / 8 GB, `ROS_LOCALHOST_ONLY=1`, her satır ayrı bir launch)
 
-Koşular 18.10.2026, 16:54–18:08. Her koşudan önce Mac'in 1 dakikalık yükü 16'nın altına inene kadar beklendi; o saatlerde başka oturumların testleri yükü ara ara 60'a çıkarıyordu. Süre: Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar. Açıklık: robotun ayak izi ile engel arasındaki en küçük plan görünüm mesafesi (gerçek konumdan).
+Koşular 18.10.2026 akşamı, **R08 sensör pozlarıyla**. Her koşudan önce Mac'in yükü 16'nın altına inene kadar beklendi; her koşuda Fast DDS paylaşımlı bellek artıkları temizlendi. Süre: Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar. Açıklık: robotun ayak izi ile engel arasındaki en küçük plan görünüm mesafesi (gerçek konumdan).
 
 | Parkur | Sensörler | Sonuç | Süre | Temas (fark edilmeyen) | En küçük açıklık |
 |---|---|---|---|---|---|
 | Oyuncak kutusu (Z0.08) | yalnız LiDAR | **varamadı**, kutuya dayanıp kaldı | 182 s zaman aşımı | **3 (3)**, paletler | 0 |
-| | tümü | **ulaştı** | 18.6 s | **0** | kutu 12.3 cm |
-| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **4 (4)**, kafa ↔ tabla | 0 |
-| | tümü | **ulaştı**, yanından dolaştı | 20.2 s | **0** | tabla 12.9 cm, ayak 15.9 cm |
-| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **4 (3)**, ayaklar: 3 palet, 1 tampon | 0 |
-| | tümü | **ulaştı** | 19.2 s | **0** | oturak 16.4 cm, ayak 19.3 cm |
-| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 282.8 s | **3 (0)**, tampon ↔ puf | 0 |
-| | tümü | **Nav2 temiz vazgeçti** (ABORTED) | 31.3 s | **0** | puf 101.8 cm |
+| | tümü | **ulaştı** | 15.8 s | **0** | kutu 34.5 cm |
+| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **3 (3)**, kafa ↔ tabla | 0 |
+| | tümü | **ulaştı**, yanından dolaştı | 34.3 s | **0** | tabla 20.0 cm, ayak 24.9 cm |
+| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **3 (2)**, ayaklar: 2 palet, 1 tampon | 0 |
+| | tümü | **ulaştı** | 16.1 s | **0** | oturak 27.1 cm, ayak 30.2 cm |
+| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 286.7 s | **3 (0)**, tampon ↔ puf | 0 |
+| | tümü | **Nav2 temiz vazgeçti** (ABORTED) | 31.3 s | **0** | puf 97.2 cm |
 | Dock yolunda eşyalar (kayıtlı harita) | yalnız LiDAR | **kenetlenmedi**, ayakkabı kutusunda takıldı | 240 s zaman aşımı | **4 (4)**, palet ↔ ayakkabı kutusu | 0 |
-| | tümü | **CHARGING + DOCKED** | 53.0 s | **0** | ayakkabı kutusu 6.4 cm, oyuncak araba 20.6 cm, top 37.1 cm |
+| | tümü | **CHARGING + DOCKED** | 53.8 s | **0** | ayakkabı kutusu 7.1 cm, oyuncak araba 20.4 cm, top 37.2 cm |
 
-- Dock satırında yalnız LiDAR koşusu **iki kez** yapıldı. İlki yük altındaydı: 127 kaçırılmış kontrol döngüsü, VM yükü 14.7. Sonucu aynıydı: 5 temas, hepsi fark edilmeden. Tablodaki ikinci koşudur; VM yükü 1.6.
-- Diğer koşuların sonunda VM yükü ≤ 2.4'tü. Yalnız LiDAR koşularında robot engele dayanmışken 7–10 "missed its desired rate" uyarısı görüldü. Bu, VM yükü 1–2 iken de oldu; zaman aşımları da hedefe varılamamasından geliyor.
-- Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu; iz ayakkabı kutusunda (1.99, 1.43) bitiyor. Top ve oyuncak araba iki koşuda da hiç değmedi. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
-- Yalnız LiDAR'la beş parkurda toplam 18 temas oldu; 14'ünü robot fark etmedi (paletler ya da kafa). Tüm sensörlerle temas 0.
+- Yalnız LiDAR'la beş parkurda toplam 16 temas oldu; 12'sini robot fark etmedi (paletler ya da kafa). Tüm sensörlerle temas 0.
+- **R08 öncesi / sonrası (tek satır):** R07 pozlarıyla (16:54–18:08) yalnız LiDAR'da 18 temas vardı, 14'ü fark edilmeyen; R08 ile 16 / 12. Tüm sensörlerle iki pozda da 0 temas. Süreler 18.6 / 20.2 / 19.2 / 31.3 / 53.0 s'den 15.8 / 34.3 / 16.1 / 31.3 / 53.8 s'ye değişti, sonuçların hiçbiri değişmedi.
+- Bu koşuların sonunda VM yükü ≤ 2.1'di. Yalnız LiDAR koşularında robot engele dayanmışken 3–9 "missed its desired rate" uyarısı görüldü (VM yükü ~1 iken de); zaman aşımları hedefe varılamamasından.
+- Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu; iz ayakkabı kutusunda (1.99, 1.43) bitiyor. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
 
-**Eski senaryolar iki kipte de geçiyor** (aynı koşu dizisi):
+**Eski senaryolar (R08 pozlarıyla)**
 
 | Kontrol | Yalnız LiDAR | Tümü |
 |---|---|---|
-| Haritalama (`sim_nav_check.py mapping`) | **17/17** | **17/17** |
-| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12** | **12/12** |
-| Birim testleri | Mac (Py 3.14) 246 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **246/246**, atlanan yok | |
+| Haritalama (`sim_nav_check.py mapping`): duvardan dock ekseni öğrenme dahil | **17/17** | **17/17** |
+| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **geçmedi: 8/12**; yeniden koşu 7/12 (yük altında, VM 9.8) | **12/12** |
+| Birim testleri | Mac (Py 3.14) 249 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **249/249** | |
+
+- **Açık sorun: LiDAR'lı yerelleştirme R08'den sonra kararsız.** R07 pozlarıyla 12/12 geçmişti. R08 ile üç denemenin hiçbiri geçmedi; ilki iptal edilen bir dizideydi, 5/12. Başarısızlıklar her seferinde farklıydı:
+  - slam_toolbox açılışta bir taramayı düşürüp hiç konum yayımlamadı;
+  - `map→odom` 0.68 s eskidi ("transform data too old"), Nav2 durdu;
+  - yük altında SLAM pozu kayboldu.
+
+  Aynı R08 çerçeveleriyle tüm sensörlü yerelleştirme ve iki dock senaryosu sorunsuz yerelleşti. Sorun LiDAR'ın −90° dönmesinde değil gibi görünüyor, ama kesin neden bulunamadı. Her kipte çok sayıda tekrar ve slam_toolbox zamanlama günlükleri gerekiyor.
 
 **Bulunan ve düzeltilen sorunlar**
 1. **Köşe ToF'leri çapraz değil, düz bakıyor.** R07'deki `FOV_R06_TOF_*` konilerinin ekseni ±Y_cad, yani robotun ileri/geri yönü. Eski simülatör çapraz modelliyordu. CAD'deki `*_L` parçaları robotun **sağında** (X < 0): `tof_fl` = `P20_F_R`. `/luna/mcu/corners` ve tampon bitleri robotun kendi sol/sağını kullanır.
@@ -746,6 +753,13 @@ Koşular 18.10.2026, 16:54–18:08. Her koşudan önce Mac'in 1 dakikalık yük�
    - P24 şeritleri yalnız |y| ≤ 0.125 m ve Z125–149'u kaplıyor.
    - Palet uçları (|y| 0.141–0.189) ve 0.125 m'den alçak her şey tampona değmeden çarpıyor: oyuncak kutusu, palet ucuna gelen sandalye ayağı.
    - Bu çarpmaları güvenlik kapısı hiç görmez.
+
+**R08 pozları ile bu dalın önceki pozları (karşılaştırma)**
+- `laser`: Z0.580 → **0.5898** (C1 veri sayfası lazer yüksekliği) ve yaw 0 → **−90°**. sllidar_ros2'de +x kablo çıkışına, yani robotun sağına bakıyor. Simülatör taramayı bu çerçevede üretiyor. Dock'taki duvar ekseni de (`front_points`) bu açıyı kullanıyor. Robot yüksekliği C1 tepesiyle 0.606 → 0.6013 m.
+- OAK-D: `oakd_link` aynı. `oakd_optical_frame` kaldırıldı; yerine depthai adlarıyla `oak_rgb/left/right_camera_optical_frame` geldi. Bulut RGB optik çerçevesinde, merkezi (0.105, 0.365) → (0.113, 0.368).
+- Köşe ToF'ler aynı: 0.16888 / 0.09355 → 0.1689 / 0.0935 (R08 0.1 mm'ye yuvarlıyor), yönler aynı.
+- Yeni: zemin ToF çerçeveleri `tof_down_*` (+x aşağı).
+- Haritalar yeni çerçeveyle her koşuda baştan üretildi. Gerçek robotta henüz kayıtlı harita yok.
 
 **Yalnız simülasyonda olanlar / doğrulanmayanlar**
 - Gerçek sensörlerin hiçbiri denenmedi. VL53L1X (ROI, zemin dönüşü, koyu/parlak yüzey), OAK-D Lite ve `depthai_ros_driver` (parametre adları, `camera_model: OAK-D-LITE`, nokta bulutu adı) denenmedi. Sürücü imajda yok, kurulmadı.
