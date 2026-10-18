@@ -704,33 +704,39 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 **A/B sonuçları** (Docker `luna-nav:humble`, colima 8 CPU / 8 GB, `ROS_LOCALHOST_ONLY=1`, her satır ayrı bir launch)
 
-Koşular 18.10.2026 akşamı, **R08 sensör pozlarıyla**. Her koşudan önce Mac'in yükü 16'nın altına inene kadar beklendi; her koşuda Fast DDS paylaşımlı bellek artıkları temizlendi. Süre: Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar. Açıklık: robotun ayak izi ile engel arasındaki en küçük plan görünüm mesafesi (gerçek konumdan).
+Son kodla (R08 pozları, tur başı tarama damgası, slam bekçisi) 19.10.2026, 00:20–02:12 arasında koşuldu. Her koşudan önce Mac yükünün 12'nin altına inmesi beklendi, yeniden koşularda 7'nin altına. O saatlerde başka oturumların derlemeleri yükü 7–37 arasında oynatıyordu. Her koşuda Fast DDS paylaşımlı bellek artıkları temizlendi.
+
+Sütunlar:
+- **Süre:** Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar.
+- **Açıklık:** robotun ayak izi ile engel arasındaki en küçük plan görünüm mesafesi, gerçek konumdan.
 
 | Parkur | Sensörler | Sonuç | Süre | Temas (fark edilmeyen) | En küçük açıklık |
 |---|---|---|---|---|---|
 | Oyuncak kutusu (Z0.08) | yalnız LiDAR | **varamadı**, kutuya dayanıp kaldı | 182 s zaman aşımı | **3 (3)**, paletler | 0 |
-| | tümü | **ulaştı** | 15.8 s | **0** | kutu 34.5 cm |
-| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **3 (3)**, kafa ↔ tabla | 0 |
-| | tümü | **ulaştı**, yanından dolaştı | 34.3 s | **0** | tabla 20.0 cm, ayak 24.9 cm |
-| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **3 (2)**, ayaklar: 2 palet, 1 tampon | 0 |
-| | tümü | **ulaştı** | 16.1 s | **0** | oturak 27.1 cm, ayak 30.2 cm |
-| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 286.7 s | **3 (0)**, tampon ↔ puf | 0 |
-| | tümü | **Nav2 temiz vazgeçti** (ABORTED) | 31.3 s | **0** | puf 97.2 cm |
+| | tümü | **ulaştı** | 20.7 s | **0** | kutu 29.9 cm |
+| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **4 (4)**, kafa ↔ tabla | 0 |
+| | tümü | **ulaştı**, yanından dolaştı | 43.4 s | **0** | tabla 20.6 cm, ayak 25.4 cm |
+| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **4 (3)**, ayaklar: 3 palet, 1 tampon | 0 |
+| | tümü | **ulaştı** | 30.7 s | **0** | oturak 12.6 cm, ayak 16.6 cm |
+| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 248.7 s | **3 (0)**, tampon ↔ puf | 0 |
+| | tümü | **Nav2 temiz vazgeçti** (ABORTED); yeniden koşu, aşağıda | 35.7 s | **0** | puf 119.1 cm |
 | Dock yolunda eşyalar (kayıtlı harita) | yalnız LiDAR | **kenetlenmedi**, ayakkabı kutusunda takıldı | 240 s zaman aşımı | **4 (4)**, palet ↔ ayakkabı kutusu | 0 |
-| | tümü | **CHARGING + DOCKED** | 53.8 s | **0** | ayakkabı kutusu 7.1 cm, oyuncak araba 20.4 cm, top 37.2 cm |
+| | tümü | **CHARGING + DOCKED**; yeniden koşu, aşağıda | 114.6 s | **0** | ayakkabı kutusu **1.9 cm**, oyuncak araba 22.7 cm, top 33.7 cm |
 
-- Yalnız LiDAR'la beş parkurda toplam 16 temas oldu; 12'sini robot fark etmedi (paletler ya da kafa). Tüm sensörlerle temas 0.
-- **R08 öncesi / sonrası (tek satır):** R07 pozlarıyla (16:54–18:08) yalnız LiDAR'da 18 temas vardı, 14'ü fark edilmeyen; R08 ile 16 / 12. Tüm sensörlerle iki pozda da 0 temas. Süreler 18.6 / 20.2 / 19.2 / 31.3 / 53.0 s'den 15.8 / 34.3 / 16.1 / 31.3 / 53.8 s'ye değişti, sonuçların hiçbiri değişmedi.
-- Bu koşuların sonunda VM yükü ≤ 2.1'di. Yalnız LiDAR koşularında robot engele dayanmışken 3–9 "missed its desired rate" uyarısı görüldü (VM yükü ~1 iken de); zaman aşımları hedefe varılamamasından.
-- Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu; iz ayakkabı kutusunda (1.99, 1.43) bitiyor. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
+- Yalnız LiDAR'la beş parkurda toplam 18 temas oldu; 14'ünü robot fark etmedi (paletler ya da kafa). Tüm sensörlerle tablodaki koşularda temas 0.
+- **Yeniden koşulanlar (kural: yükten bozulan koşu bir kez daha):**
+  - Kapı, tüm sensörler: ilk iki koşuda senaryo betiği hedefi `bt_navigator` hâlâ etkinleşirken gönderdi ve hedef kayboldu (0.0 s). Bu bir betik yarışıydı; betik artık Nav2'nin "aktif" demesini bekliyor. Tablodaki üçüncü koşu.
+  - Dock, tüm sensörler: Mac yükü 7–9 iken denetleyici 165 kez döngüsünü kaçırdı; robot 144.7 s'de kenetlendi ama ayakkabı kutusuna 2 kez değdi. Yeniden koşuda yük 13–15'ti, döngü 301 kez kaçtı; robot 4 kez değdi ve kenetlenmedi. Yük 6.6 iken yapılan üçüncü koşu tablodadır: 0 temas, ama yalnız 1.9 cm açıklık. R08 setinde 7.1 cm, R07 setinde 6.4 cm'ydi. Kutu, dock öncesi poza dönüşün tam iç köşesinde. Pure Pursuit köşeyi kesiyor ve denetleyici yavaşlayınca kutuya sürtüyor. **Açık:** dock yaklaşmasında alçak engellere pay yetersiz (şişirme / RPP çarpışma bakış mesafesi ayarı gerekiyor).
+- **Eski–yeni farkı (tek satır):** Yalnız LiDAR'da temas sayıları: R07 pozlarıyla 18 (14'ü fark edilmeyen), ilk R08 setinde 16 (12), son kodla 18 (14). Tüm sensörlerle temas yük altındaki dock koşuları dışında 0. Sonuçların hiçbiri değişmedi. Tüm sensörlü süreler bu sette daha uzun (yük): sehpa 20.2 → 43.4 s, sandalye 19.2 → 30.7 s.
+- Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
 
-**Eski senaryolar (R08 pozlarıyla)**
+**Eski senaryolar (son kod)**
 
 | Kontrol | Yalnız LiDAR | Tümü |
 |---|---|---|
 | Haritalama (`sim_nav_check.py mapping`): duvardan dock ekseni öğrenme dahil | **17/17** | **17/17** |
-| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **geçmedi: 8/12**; yeniden koşu 7/12 (yük altında, VM 9.8) | **12/12** |
-| Birim testleri | Mac (Py 3.14) 249 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **249/249** | |
+| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12**; ayrıca art arda 6/6 deneme | **12/12**; ayrıca art arda 6/6 deneme |
+| Birim testleri | Mac (Py 3.14) 257 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **257/257** | |
 
 **Yerelleştirme kararsızlığı: kök neden ve çözüm (19.10.2026)**
 
