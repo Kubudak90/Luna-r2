@@ -732,12 +732,25 @@ Koşular 18.10.2026 akşamı, **R08 sensör pozlarıyla**. Her koşudan önce Ma
 | Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **geçmedi: 8/12**; yeniden koşu 7/12 (yük altında, VM 9.8) | **12/12** |
 | Birim testleri | Mac (Py 3.14) 249 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **249/249** | |
 
-- **Açık sorun: LiDAR'lı yerelleştirme R08'den sonra kararsız.** R07 pozlarıyla 12/12 geçmişti. R08 ile üç denemenin hiçbiri geçmedi; ilki iptal edilen bir dizideydi, 5/12. Başarısızlıklar her seferinde farklıydı:
-  - slam_toolbox açılışta bir taramayı düşürüp hiç konum yayımlamadı;
-  - `map→odom` 0.68 s eskidi ("transform data too old"), Nav2 durdu;
-  - yük altında SLAM pozu kayboldu.
+**Yerelleştirme kararsızlığı: kök neden ve çözüm (19.10.2026)**
 
-  Aynı R08 çerçeveleriyle tüm sensörlü yerelleştirme ve iki dock senaryosu sorunsuz yerelleşti. Sorun LiDAR'ın −90° dönmesinde değil gibi görünüyor, ama kesin neden bulunamadı. Her kipte çok sayıda tekrar ve slam_toolbox zamanlama günlükleri gerekiyor.
+R08'den sonra yalnız LiDAR'lı yerelleştirme üç kez düşmüştü (5/12, 8/12, 7/12). Ayrıntılı ölçüm:
+- **Çerçeve değil.** Aynı kodla `laser_joint` R07 değerine (z 0.58, yaw 0) döndürüldü, harita o çerçeveyle yeniden çıkarıldı ve 5 deneme koşuldu: 4/5 geçti. R08 değerleriyle de 4/5 geçti. Sonraki R08 denemeleri 6/6 ve 6/6 geçti. Tüm sensörlü kipte de düşüşler oldu (6 denemede 3). Sorun ne LiDAR'ın dönmesinde ne de tek bir kipte.
+- **Ne oluyor?** Her denemede bir gözlemci `map→odom`'un yaşını saniyede bir yazdı. İki ayrı belirti görüldü:
+  1. **Tam kilitlenme** (38 denemede 4): `map→odom` damgası bir anda donuyor ve bir daha ilerlemiyor. slam_toolbox'ın bütün iş parçacıkları futex'te uyuyor, işlemci harcamıyor. Parametre servisi 15 s'de cevap vermiyor, yani yürütücüsü kilitli. Bu sırada `/scan` 9 Hz akmaya devam ediyor.
+  2. **1–2 s'lik takılma** (38 denemede 2): damga bir an geride kalıyor. slam_toolbox `map→odom`'u "son işlenen tarama + `transform_timeout` (0.5 s)" damgasıyla yayımladığı için Nav2 denetleyicisi "Transform data too old" deyip duruyor.
+- **Elenen olasılıklar:** odometri TF'inde 2 s'lik boşluk kilitlenme yapmadı (base_node SIGSTOP ile durduruldu, SLAM 1 s'de toparlandı). tf2_ros'un MessageFilter'ında, Buffer'ında ve CreateTimerROS'ta ters kilit sırası yok (Humble kaynağı okundu). slam_toolbox'ın kendi kilit sırası tutarlı.
+- **Kök neden (simülatörde):** sim2d taramayı yayımladığı an ("şimdi") damgalıyordu. Odometri TF'i her zaman birkaç milisaniye eskiydi. slam_toolbox'ın tf2 MessageFilter'ı bu yüzden **her tarama için** bir "TF hazır olunca haber ver" isteği ve bir zaman aşımı zamanlayıcısı kurdu. Dört kilitlenmeden ikisi açılışta, filtrenin "queue is full" düşürmesinden birkaç saniye sonra (5. ve 7. s) geldi. İkisi sürüş sırasında geldi (26. ve 31. s; biri VM yükü 17 iken). ROS'ta `LaserScan` damgası ilk ışının zamanıdır; gerçek C1 sürücüsü de (sllidar_ros2, `grabScanDataHq`'dan önce alınan zaman) taramayı turun başında damgalıyor. Yani tarama yaklaşık 0.1 s eski gelir ve TF'i hazırdır. Simülatör artık taramayı 0.1 s önceye damgalıyor ve robotun o anki konumundan üretiyor. Kilidin slam_toolbox / tf2 içindeki tam yeri hata ayıklayıcı olmadığı için (kurulmadı) bulunamadı.
+- **Çözüm:**
+  1. Tarama damgası tur başında (`sim2d_node.py`).
+  2. Yerelleştirmede `transform_timeout` 0.5 → 1.5 s (`config/slam_localization.yaml`): 1–2 s'lik takılmalar Nav2'yi artık durdurmuyor.
+  3. **`slam_watchdog_node`** güvenlik ağı: tarama akarken `map→odom` 4 s ilerlemezse slam_toolbox'ın parametre servisini yokluyor. Cevap gelirse düğüm yalnız yavaştır, dokunulmaz. 8 s cevap gelmezse öldürüyor; launch onu aynı kayıtlı haritayla yeniden başlatıyor (`respawn`). Bekçi son sağlam `map→odom` ile güncel odometriden hesaplanan konumu `/initialpose` ile geri veriyor. Yalnız yerelleştirmede çalışıyor; haritalamada yeniden başlatma, çıkarılan haritayı kaybettirirdi.
+  4. Aynı açılış yarışı iki yerde daha vardı ve kapatıldı: `dock_nav_node` ile senaryo betiği hedefi artık Nav2'nin yaşam döngüsü yöneticisi "aktif" demeden göndermiyor.
+- **Kanıt:**
+  - Damga düzeltmesinden önce aynı yük düzeyinde 38 denemede 6 düşüş vardı (4 kilitlenme, 2 takılma). Düzeltmeden sonra **12/12 art arda geçti**: yalnız LiDAR 6/6, tüm sensörler 6/6. Hiç kilitlenme olmadı, bekçi bir kez bile devreye girmedi.
+  - Bekçi ayrıca zorla denendi: koşunun 25. saniyesinde slam_toolbox SIGSTOP ile kalıcı dondurulunca 12 s içinde yeniden başlattı ve konumu (2.27, 1.39) geri verdi; senaryo **12/12** geçti.
+  - Düzeltmeden önceki doğrulamada da (bekçi vardı, damga eskiydi) bekçi gerçek bir kilitlenmeyi iki kez yeniden başlatarak kurtardı. Ama ikinci örnek de açılışta kilitlendiği için 42 s sürdü ve o deneme düştü.
+- **Gerçek robotta:** sllidar_ros2 zaten tur başında damgalıyor. Ama Python base_node'un odometri TF'i yük altında 0.1 s'den fazla gecikirse aynı bekleme yolu açılır. Bekçi bu yüzden kalıyor. Xavier'de TF gecikmesi ölçülmeli.
 
 **Bulunan ve düzeltilen sorunlar**
 1. **Köşe ToF'leri çapraz değil, düz bakıyor.** R07'deki `FOV_R06_TOF_*` konilerinin ekseni ±Y_cad, yani robotun ileri/geri yönü. Eski simülatör çapraz modelliyordu. CAD'deki `*_L` parçaları robotun **sağında** (X < 0): `tof_fl` = `P20_F_R`. `/luna/mcu/corners` ve tampon bitleri robotun kendi sol/sağını kullanır.

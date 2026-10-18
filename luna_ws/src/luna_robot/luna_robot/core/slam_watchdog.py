@@ -1,10 +1,13 @@
 """Watchdog for slam_toolbox in localization mode (slam_watchdog_node).
 
-slam_toolbox 2.6.10's localization node sometimes locks up for good: its executor stops (the parameter service no
-longer answers), every thread sleeps on a futex, and map→odom is never published again while /scan keeps coming.
-In the simulator that happened in about 1 of 12 localization runs, with the R07 and the R08 LiDAR pose alike and
-with obstacle_sensors lidar and all alike (README_TR.md, "Engel algılama"). Nav2 then stops for good: the robot is
-lost on a map it knows. The cause inside slam_toolbox was not found, so the watchdog recovers instead:
+slam_toolbox 2.6.10's localization node can lock up for good: its executor stops (the parameter service no longer
+answers), every thread sleeps on a futex, and map→odom is never published again while /scan keeps coming; Nav2 then
+stops and the robot is lost on a map it knows. In the simulator this came with scans that had to wait for their
+odometry TF in slam_toolbox's tf2 MessageFilter (sim2d stamped scans "now"; README_TR.md, "Engel algılama"): 4 lock-
+ups in 38 instrumented runs, none in 12 once scans were stamped at the start of the turn like the real driver's. On
+the robot, odometry TF from the Python base_node can still lag behind the scans, and the exact place of the lock
+inside slam_toolbox / tf2 was not found, so this watchdog stays as the safety net (tested by freezing slam_toolbox
+with SIGSTOP mid-run: restarted, relocalized, docked):
 
   WATCH       map→odom's stamp has not moved for stall_s (or never appeared within startup_s) while scans arrive
               → 'probe' (ask slam_toolbox's parameter service)

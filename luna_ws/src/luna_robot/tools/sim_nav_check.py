@@ -28,6 +28,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time
 from slam_toolbox.srv import SaveMap, SerializePoseGraph
 from std_msgs.msg import Bool, Float32MultiArray, String
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -78,6 +79,8 @@ class Check(Node):
         self.pub_go = self.create_publisher(String, T.NAV_DOCK, 10)
         self.pub_estop = self.create_publisher(Bool, T.SIM_ESTOP, 10)
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.active_client = self.create_client(Trigger, '/lifecycle_manager_navigation/is_active')
+        self.active_call = None
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
 
@@ -148,9 +151,21 @@ class Check(Node):
         ok = self.wait(lambda: self.truth is not None and self.map_info is not None and self.map_pose() is not None
                        and self.states[T.NAV_DOCK_STATE] is not None, 90, 'truth, /map, map→base_footprint, dock_nav')
         self.check('bringup: sim, SLAM map, TF and dock_nav up', ok)
-        ok = self.nav.wait_for_server(timeout_sec=90)
+        # The action server exists from configure on; a goal sent before the lifecycle manager reports "active" can
+        # be lost while bt_navigator activates (seen on a loaded CPU: no response, launch then torn down).
+        ok = self.nav.wait_for_server(timeout_sec=90) and self.wait(self.nav2_active, 90, 'Nav2 lifecycle active')
         self.check('Nav2 navigate_to_pose server up', ok)
         self.spin_for(2.0)
+
+    def nav2_active(self):
+        if self.active_call is None:
+            if self.active_client.service_is_ready():
+                self.active_call = self.active_client.call_async(Trigger.Request())
+            return False
+        if not self.active_call.done():
+            return False
+        result, self.active_call = self.active_call.result(), None
+        return bool(result and result.success)
 
     def check_velocity_graph(self):
         pubs = lambda topic: sorted(i.node_name for i in self.get_publishers_info_by_topic(topic))
