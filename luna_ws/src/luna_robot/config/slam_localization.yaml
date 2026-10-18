@@ -11,3 +11,8 @@ slam_toolbox:
     scan_buffer_size: 3              # rolling buffer of recent scans matched against the map
     do_loop_closing: true
     loop_match_minimum_chain_size: 3 # slam_toolbox's own localization default
+    # slam_toolbox stamps map→odom "last processed scan + transform_timeout". In localization its scan callback
+    # sometimes runs 1–2 s late; with 0.5 s the stamp then fell more than Nav2's 0.5 s tolerance behind and the
+    # controller stopped ("Transform data too old when converting from map to odom"). map→odom only moves when SLAM
+    # corrects drift, so stamping it 1.5 s ahead is harmless; scans also wait up to 1.5 s for their odometry TF.
+    transform_timeout: 1.5

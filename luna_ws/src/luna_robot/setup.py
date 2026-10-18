@@ -34,6 +34,7 @@ setup(
             'sim2d_node = luna_robot.sim2d_node:main',
             'dock_nav_node = luna_robot.dock_nav_node:main',
             'tof_range_node = luna_robot.tof_range_node:main',
+            'slam_watchdog_node = luna_robot.slam_watchdog_node:main',
             'sim_depth_node = luna_robot.sim_depth_node:main',
             'audio_node = luna_robot.audio_node:main',
             'attention_node = luna_robot.attention_node:main',
