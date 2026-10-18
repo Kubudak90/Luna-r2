@@ -464,10 +464,10 @@ class Sim2D:
         self._log_contacts(hard, pressed, wall_bits)
         self.wh = min(c.pack_wh, self.wh + (c.charge_w if self.charging else -c.drain_w) * dt / 3600)
 
-    def scan(self):
+    def scan(self, pose=None):
         """RPLIDAR C1 ranges (m, inf = no return), angle_min = -pi, increment 2*pi/beams, in the laser frame (turned by
-        the urdf laser yaw). Only walls and obstacles spanning the scan plane return."""
-        c, p = self.cfg, self.pose
+        the urdf laser yaw), seen from `pose` (default: now). Only walls and obstacles spanning the scan plane return."""
+        c, p = self.cfg, pose or self.pose
         cy, sy = math.cos(p.yaw), math.sin(p.yaw)
         lx, ly = p.x + self.laser_x * cy - self.laser_y * sy, p.y + self.laser_x * sy + self.laser_y * cy
         inc = 2 * math.pi / c.beams

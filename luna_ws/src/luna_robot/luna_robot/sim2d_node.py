@@ -4,9 +4,11 @@ Same MCU topics as the Teensy firmware (corner ToF at its 5 Hz), plus /scan in t
 on /luna/sim/truth (frame 'world') and every contact with an obstacle on /luna/sim/contact; both for tests only,
 nothing in the robot stack may use them. /luna/sim/estop (Bool) presses the simulated E-stop."""
 import math
+from collections import deque
 
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool, Float32MultiArray, String, UInt8
@@ -48,6 +50,7 @@ class Sim2DNode(Node):
         self.p_truth = self.create_publisher(Odometry, T.SIM_TRUTH, 10)
         self.p_contact = self.create_publisher(String, T.SIM_CONTACT, 50)
         self.dt, self.ticks = 0.02, 0
+        self.poses = deque(maxlen=20)                              # (sim time, pose): the last 0.4 s
         self.create_timer(self.dt, self._tick)
         self.create_timer(0.1, self._scan)                         # RPLIDAR C1: 10 Hz
 
@@ -58,6 +61,7 @@ class Sim2DNode(Node):
     def _tick(self):
         s = self.sim
         s.step(self.dt)
+        self.poses.append((s.t, s.pose))
         self.ticks += 1
         self.p_wheels.publish(Float32MultiArray(data=[*s.pos, *s.vel]))
         self.p_bump.publish(UInt8(data=s.bumpers))
@@ -103,14 +107,20 @@ class Sim2DNode(Node):
     def _scan(self):
         c = self.sim.cfg
         m = LaserScan()
-        m.header.stamp = self.get_clock().now().to_msg()
+        # LaserScan convention: the stamp is the time of the first beam. A real C1 turn takes 0.1 s, so its scan is
+        # 0.1 s old on arrival and the odometry TF for it is already there. Stamped "now", every scan waited for TF
+        # in slam_toolbox's tf2 MessageFilter (a wait request and a timeout timer per scan); the localization lock-ups
+        # came with that waiting (README_TR.md, "Engel algılama").
+        m.header.stamp = (self.get_clock().now() - Duration(seconds=0.1)).to_msg()
+        t = self.sim.t - 0.1                                       # ... and seen from where the robot was then
+        pose = min(self.poses, key=lambda tp: abs(tp[0] - t))[1] if self.poses else None
         m.header.frame_id = 'laser'
         m.angle_increment = 2 * math.pi / c.beams
         m.angle_min = -math.pi
         m.angle_max = -math.pi + (c.beams - 1) * m.angle_increment
         m.scan_time, m.time_increment = 0.1, 0.1 / c.beams
         m.range_min, m.range_max = 0.05, c.range_max
-        m.ranges = self.sim.scan()
+        m.ranges = self.sim.scan(pose)
         self.p_scan.publish(m)
 
 
