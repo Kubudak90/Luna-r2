@@ -704,7 +704,33 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 **A/B sonuçları** (Docker `luna-nav:humble`, colima 8 CPU / 8 GB, `ROS_LOCALHOST_ONLY=1`, her satır ayrı bir launch)
 
-A/B_TABLE_PLACEHOLDER
+Koşular 18.10.2026, 16:54–18:08. Her koşudan önce Mac'in 1 dakikalık yükü 16'nın altına inene kadar beklendi; o saatlerde başka oturumların testleri yükü ara ara 60'a çıkarıyordu. Süre: Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar. Açıklık: robotun ayak izi ile engel arasındaki en küçük plan görünüm mesafesi (gerçek konumdan).
+
+| Parkur | Sensörler | Sonuç | Süre | Temas (fark edilmeyen) | En küçük açıklık |
+|---|---|---|---|---|---|
+| Oyuncak kutusu (Z0.08) | yalnız LiDAR | **varamadı**, kutuya dayanıp kaldı | 182 s zaman aşımı | **3 (3)**, paletler | 0 |
+| | tümü | **ulaştı** | 18.6 s | **0** | kutu 12.3 cm |
+| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **4 (4)**, kafa ↔ tabla | 0 |
+| | tümü | **ulaştı**, yanından dolaştı | 20.2 s | **0** | tabla 12.9 cm, ayak 15.9 cm |
+| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **4 (3)**, ayaklar: 3 palet, 1 tampon | 0 |
+| | tümü | **ulaştı** | 19.2 s | **0** | oturak 16.4 cm, ayak 19.3 cm |
+| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 282.8 s | **3 (0)**, tampon ↔ puf | 0 |
+| | tümü | **Nav2 temiz vazgeçti** (ABORTED) | 31.3 s | **0** | puf 101.8 cm |
+| Dock yolunda eşyalar (kayıtlı harita) | yalnız LiDAR | **kenetlenmedi**, ayakkabı kutusunda takıldı | 240 s zaman aşımı | **4 (4)**, palet ↔ ayakkabı kutusu | 0 |
+| | tümü | **CHARGING + DOCKED** | 53.0 s | **0** | ayakkabı kutusu 6.4 cm, oyuncak araba 20.6 cm, top 37.1 cm |
+
+- Dock satırında yalnız LiDAR koşusu **iki kez** yapıldı. İlki yük altındaydı: 127 kaçırılmış kontrol döngüsü, VM yükü 14.7. Sonucu aynıydı: 5 temas, hepsi fark edilmeden. Tablodaki ikinci koşudur; VM yükü 1.6.
+- Diğer koşuların sonunda VM yükü ≤ 2.4'tü. Yalnız LiDAR koşularında robot engele dayanmışken 7–10 "missed its desired rate" uyarısı görüldü. Bu, VM yükü 1–2 iken de oldu; zaman aşımları da hedefe varılamamasından geliyor.
+- Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu; iz ayakkabı kutusunda (1.99, 1.43) bitiyor. Top ve oyuncak araba iki koşuda da hiç değmedi. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
+- Yalnız LiDAR'la beş parkurda toplam 18 temas oldu; 14'ünü robot fark etmedi (paletler ya da kafa). Tüm sensörlerle temas 0.
+
+**Eski senaryolar iki kipte de geçiyor** (aynı koşu dizisi):
+
+| Kontrol | Yalnız LiDAR | Tümü |
+|---|---|---|
+| Haritalama (`sim_nav_check.py mapping`) | **17/17** | **17/17** |
+| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12** | **12/12** |
+| Birim testleri | Mac (Py 3.14) 246 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **246/246**, atlanan yok | |
 
 **Bulunan ve düzeltilen sorunlar**
 1. **Köşe ToF'leri çapraz değil, düz bakıyor.** R07'deki `FOV_R06_TOF_*` konilerinin ekseni ±Y_cad, yani robotun ileri/geri yönü. Eski simülatör çapraz modelliyordu. CAD'deki `*_L` parçaları robotun **sağında** (X < 0): `tof_fl` = `P20_F_R`. `/luna/mcu/corners` ve tampon bitleri robotun kendi sol/sağını kullanır.
@@ -715,7 +741,8 @@ A/B_TABLE_PLACEHOLDER
    - Aynı yapılandırmayla bir başka koşu sorunsuz geçti; hata açılış sırasına bağlı.
    - ToF bu yüzden haritalara nokta yayı olarak, TF filtreli sıradan bir ObstacleLayer üzerinden veriliyor. collision_monitor yalnız son Range'i tuttuğu için onu okumaya devam ediyor.
 4. **Range damgası.** Varış anıyla damgalanınca TF araması henüz yayımlanmamış odometriyi istiyordu. Damga artık "varış − 0.1 s" (ölçüm anı tahmini: 50 ms ölçüm bütçesi, 5 Hz okuma, micro-ROS).
-5. **Tampon kapsamı dar.**
+5. **Dock'a git, Nav2 açılırken yarışa giriyordu.** `dock_nav_node`, Nav2'nin eylem sunucusu var ama henüz aktif değilken hedef gönderebiliyordu. Hedef birkaç saniye sonra kabul edildiğinde zaman damgası bt_navigator / planner_server'ın TF önbelleğinden eski kalıyordu; robot pozunu o anda arayan Nav2 sonsuza dek "geçmişe uzanma" hatası verdi ve robot yerinden kalkmadı. Yeni düğümler açılış sırasını değiştirince ortaya çıktı (eski bir yarış). Damgayı sıfır ("en son") yapmak denendi ama Nav2 Humble'da hedefi aralıklı olarak başlangıçta "ulaşıldı" saydı. Çözüm: `dock_nav_node` artık `lifecycle_manager_navigation/is_active` "aktif" diyene kadar hedef göndermiyor; bu bekleme deneme sayılmıyor.
+6. **Tampon kapsamı dar.**
    - P24 şeritleri yalnız |y| ≤ 0.125 m ve Z125–149'u kaplıyor.
    - Palet uçları (|y| 0.141–0.189) ve 0.125 m'den alçak her şey tampona değmeden çarpıyor: oyuncak kutusu, palet ucuna gelen sandalye ayağı.
    - Bu çarpmaları güvenlik kapısı hiç görmez.
