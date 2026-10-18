@@ -24,10 +24,11 @@ from . import topics as T
 from .entry import run
 from .core.dock_nav import (DockNav, DockNavConfig, NavObs, Pose2D, format_dock_pose, front_points, parse_dock_pose,
                             wall_normal_yaw, wrap)
+from .core.robot_model import load_frames
 
 STATUS = {GoalStatus.STATUS_SUCCEEDED: 'succeeded', GoalStatus.STATUS_CANCELED: 'canceled'}
 POSE_MAX_AGE_S = 2.0          # map→base older than this (SLAM stopped) counts as not localized
-LASER_X = -0.070              # urdf laser_joint
+LASER_X = load_frames().origin('laser')[0]   # urdf laser_joint
 WALL_RANGE_M, WALL_HALF_ANGLE = 1.0, math.radians(35)   # the wall behind the dock, seen while docked
 BACKUP_SPEED = 0.08
 
@@ -192,7 +193,9 @@ class DockNavNode(Node):
 
     def _stamped(self, pose):
         m = PoseStamped()
-        m.header.stamp = self.get_clock().now().to_msg()
+        # Stamp 0 = "latest" for tf2. Stamped with now(), a goal sent while Nav2 was still activating (accepted a few
+        # seconds later) predated SLAM's first map→odom, and bt_navigator / planner_server failed to transform the
+        # robot pose at that time forever: go-to-dock never left the start.
         m.header.frame_id = self.map_frame
         m.pose.position.x, m.pose.position.y = pose.x, pose.y
         m.pose.orientation.z, m.pose.orientation.w = math.sin(pose.yaw / 2), math.cos(pose.yaw / 2)

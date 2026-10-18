@@ -9,6 +9,13 @@ tags:= where /luna/dock/tag comes from (default: mock with mock:=true, usb with 
   usb   the two Arducam head cameras (usb_cam) → apriltag_ros → dock_tag_node
 With sim:=true the 2D simulator replaces the mock MCU and publishes /luna/dock/tag itself, so tags:= must stay
 empty or mock.
+Obstacles below the LiDAR plane: tof_range_node always turns the corner ToF into /luna/tof/* (sensor_msgs/Range).
+depth:= where /oak/points comes from (default: sim with sim:=true, else off)
+  sim   sim_depth_node renders the 2.5D simulator's room (needs sim:=true)
+  oakd  Luxonis OAK-D Lite via depthai_ros_driver (optional like sllidar_ros2: skipped with a warning if absent;
+        config/oakd.yaml, not tried on hardware)
+  off   no depth camera
+sim_world:= the simulator's room (core/sim_worlds.py: room, toy, table, chair, dock, door).
 Voice: voice:=false leaves out audio/attention/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival;
 use doa:=mock or voice:=false with mock:=true / sim:=true); cloud:=true is the owner's consent for the cloud
 assistant (it also needs a key, see config/luna.yaml)."""
@@ -16,7 +23,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, SetEnvironmentVariable
+from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction,
+                            SetEnvironmentVariable)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -72,6 +80,32 @@ def _tag_pipeline(context, params, share):
     return actions
 
 
+def _depth(context, params):
+    sim = context.perform_substitution(LaunchConfiguration('sim')).lower() in ('true', '1')
+    depth = context.perform_substitution(LaunchConfiguration('depth')) or ('sim' if sim else 'off')
+    if depth not in ('sim', 'oakd', 'off'):
+        raise ValueError(f'depth:={depth}: expected sim, oakd or off')
+    if depth == 'sim' and not sim:
+        raise ValueError('depth:=sim needs sim:=true (it renders the simulator\'s room)')
+    world = context.perform_substitution(LaunchConfiguration('sim_world'))
+    if depth == 'sim':
+        return [Node(package='luna_robot', executable='sim_depth_node', name='luna_sim_depth',
+                     parameters=[params, {'world': world}])]
+    if depth == 'off':
+        return []
+    try:  # depthai_ros_driver is optional (not in the image); the camera pose stays in our URDF (oakd_link)
+        driver = get_package_share_directory('depthai_ros_driver')
+    except Exception:
+        return [LogInfo(msg='depth:=oakd but depthai_ros_driver is not installed: no depth camera')]
+    share = get_package_share_directory('luna_robot')
+    return [IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(driver, 'launch', 'camera.launch.py')),
+        launch_arguments={'name': 'oak', 'camera_model': 'OAK-D-LITE', 'parent_frame': 'oakd_link',
+                          'cam_pos_x': '0.0', 'cam_pos_y': '0.0', 'cam_pos_z': '0.0', 'cam_roll': '0.0',
+                          'cam_pitch': '0.0', 'cam_yaw': '0.0', 'pointcloud.enable': 'true',
+                          'params_file': os.path.join(share, 'config', 'oakd.yaml')}.items())]
+
+
 def generate_launch_description():
     share = get_package_share_directory('luna_robot')
     params = os.path.join(share, 'config', 'luna.yaml')
@@ -88,6 +122,8 @@ def generate_launch_description():
         DeclareLaunchArgument('auto_dock', default_value='true',
                               description='dock_node docks by itself on low battery (false when dock_nav_node decides)'),
         DeclareLaunchArgument('lidar', default_value='false'),
+        DeclareLaunchArgument('depth', default_value='', description='sim | oakd | off (default: sim if sim:=true, else off)'),
+        DeclareLaunchArgument('sim_world', default_value='room', description='simulator room (core/sim_worlds.py)'),
         DeclareLaunchArgument('mcu_port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('tags', default_value='', description='mock | sim | usb (default: mock if mock:=true, else usb)'),
@@ -104,8 +140,11 @@ def generate_launch_description():
         Node(package='luna_robot', executable='face_bridge_node', name='luna_face_bridge', parameters=[params]),
         OpaqueFunction(function=_tag_pipeline, args=[params, share]),   # mock MCU and/or the tag pipeline
         Node(package='luna_robot', executable='sim2d_node', name='luna_sim2d',
-             parameters=[params, {'start_soc': ParameterValue(LaunchConfiguration('sim_soc'), value_type=float)}],
+             parameters=[params, {'start_soc': ParameterValue(LaunchConfiguration('sim_soc'), value_type=float),
+                                  'world': LaunchConfiguration('sim_world')}],
              condition=IfCondition(sim)),
+        Node(package='luna_robot', executable='tof_range_node', name='luna_tof_range', parameters=[params]),
+        OpaqueFunction(function=_depth, args=[params]),
         Node(package='micro_ros_agent', executable='micro_ros_agent', arguments=['serial', '--dev', LaunchConfiguration('mcu_port')],
              condition=IfCondition(PythonExpression(["'", mock, "' != 'true' and '", sim, "' != 'true'"]))),
         Node(package='luna_robot', executable='audio_node', name='luna_audio', condition=voice,

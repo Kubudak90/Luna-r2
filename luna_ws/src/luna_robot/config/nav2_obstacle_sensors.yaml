@@ -1,0 +1,207 @@
+# Overlay on config/nav2.yaml for obstacle_sensors:=all (launch/nav2.launch.py loads it after nav2.yaml, so the keys
+# here win). Adds what sits below the LiDAR plane (laser frame, ≈ 0.58 m): coffee tables, chair seats, toys.
+#   depth camera  OAK-D Lite, /oak/points (depthai_ros_driver or sim_depth_node) → voxel_layer, collision_monitor
+#   corner ToF    4 × VL53L1X (tof_range_node): arcs /luna/tof/*/points → tof_layer, Range /luna/tof/* → collision_monitor
+# Heights are in the costmap frame (floor = 0): 0.03 m keeps the noisy floor out, 0.62 m is just above the robot's
+# top (RPLIDAR C1 ≈ 0.606 m), so a table top it cannot pass under counts and a shelf above it does not.
+# The voxel layer clears in 3D: a ray that passes over a low box to the floor behind it does not erase the box.
+# Its clearing source keeps the floor points (min -0.10 m); the marking source does not.
+# The ToF go to a plain ObstacleLayer as point arcs, not to RangeSensorLayer: Humble's RangeSensorLayer queues every
+# Range without limit and blocks transform_tolerance per failed TF lookup; readings from before SLAM's map frame
+# existed froze the global costmap for good (planner at 0.009 Hz). ObstacleLayer's TF filter just drops them.
+# Written out twice (local, global) on purpose: ROS 2 parameter files do not take YAML anchors.
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: [obstacle_layer, voxel_layer, tof_layer, inflation_layer]
+      voxel_layer:
+        plugin: nav2_costmap_2d::VoxelLayer
+        enabled: true
+        footprint_clearing_enabled: true
+        max_obstacle_height: 0.8
+        publish_voxel_map: false
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        unknown_threshold: 15
+        mark_threshold: 0
+        combination_method: 1
+        observation_sources: depth_mark depth_clear
+        depth_mark:
+          topic: /oak/points
+          data_type: PointCloud2
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.03
+          max_obstacle_height: 0.62
+          obstacle_max_range: 2.0          # 1° of body pitch lifts the floor 3.5 cm at 2 m (not modelled in the sim)
+          obstacle_min_range: 0.0
+        depth_clear:
+          topic: /oak/points
+          data_type: PointCloud2
+          marking: false
+          clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 0.80
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+      tof_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        footprint_clearing_enabled: true
+        combination_method: 1
+        observation_sources: tof_fl tof_fr tof_bl tof_br
+        tof_fl:
+          topic: /luna/tof/fl/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69         # a 0.70 m (max_range) arc means nothing nearer: it only clears
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_fr:
+          topic: /luna/tof/fr/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_bl:
+          topic: /luna/tof/bl/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_br:
+          topic: /luna/tof/br/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: [static_layer, obstacle_layer, voxel_layer, tof_layer, inflation_layer]
+      voxel_layer:
+        plugin: nav2_costmap_2d::VoxelLayer
+        enabled: true
+        footprint_clearing_enabled: true
+        max_obstacle_height: 0.8
+        publish_voxel_map: false
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        unknown_threshold: 15
+        mark_threshold: 0
+        combination_method: 1
+        observation_sources: depth_mark depth_clear
+        depth_mark:
+          topic: /oak/points
+          data_type: PointCloud2
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.03
+          max_obstacle_height: 0.62
+          obstacle_max_range: 2.0          # 1° of body pitch lifts the floor 3.5 cm at 2 m (not modelled in the sim)
+          obstacle_min_range: 0.0
+        depth_clear:
+          topic: /oak/points
+          data_type: PointCloud2
+          marking: false
+          clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 0.80
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+      tof_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        footprint_clearing_enabled: true
+        combination_method: 1
+        observation_sources: tof_fl tof_fr tof_bl tof_br
+        tof_fl:
+          topic: /luna/tof/fl/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69         # a 0.70 m (max_range) arc means nothing nearer: it only clears
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_fr:
+          topic: /luna/tof/fr/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_bl:
+          topic: /luna/tof/bl/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+        tof_br:
+          topic: /luna/tof/br/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.0
+          max_obstacle_height: 0.62
+          obstacle_max_range: 0.69
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.75
+          raytrace_min_range: 0.0
+collision_monitor:
+  ros__parameters:
+    observation_sources: [scan, depth, tof_fl, tof_fr, tof_bl, tof_br]
+    depth:
+      type: pointcloud
+      topic: /oak/points
+      min_height: 0.03
+      max_height: 0.62
+    tof_fl:
+      type: range
+      topic: /luna/tof/fl
+      obstacles_angle: 0.08              # one point per 4.6° of the 27° arc
+    tof_fr:
+      type: range
+      topic: /luna/tof/fr
+      obstacles_angle: 0.08
+    tof_bl:
+      type: range
+      topic: /luna/tof/bl
+      obstacles_angle: 0.08
+    tof_br:
+      type: range
+      topic: /luna/tof/br
+      obstacles_angle: 0.08

@@ -1,24 +1,27 @@
-"""2D simulator: replaces mock_mcu_node with a room, a LiDAR and the dock on a wall (core/sim2d.py), so SLAM, Nav2
-and docking run with no hardware. Same MCU topics as the Teensy firmware, plus /scan in the 'laser' frame and the
-ground truth on /luna/sim/truth (frame 'world', for tests only: nothing in the robot stack may use it).
-/luna/sim/estop (Bool) presses the simulated E-stop."""
+"""2.5D simulator: replaces mock_mcu_node with a room, furniture, a LiDAR and the dock on a wall (core/sim2d.py,
+rooms in core/sim_worlds.py, parameter `world`), so SLAM, Nav2, docking and obstacle courses run with no hardware.
+Same MCU topics as the Teensy firmware (corner ToF at its 5 Hz), plus /scan in the 'laser' frame, the ground truth
+on /luna/sim/truth (frame 'world') and every contact with an obstacle on /luna/sim/contact; both for tests only,
+nothing in the robot stack may use them. /luna/sim/estop (Bool) presses the simulated E-stop."""
 import math
 
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import Bool, Float32MultiArray, UInt8
+from std_msgs.msg import Bool, Float32MultiArray, String, UInt8
 
 from . import topics as T
 from .entry import run
 from .core.dock_nav import Pose2D
-from .core.sim2d import Sim2D, SimConfig, default_room
+from .core.sim2d import Sim2D, SimConfig
+from .core.sim_worlds import world
 
 
 class Sim2DNode(Node):
     def __init__(self):
         super().__init__('luna_sim2d')
+        self.declare_parameter('world', 'room')
         self.declare_parameter('start_soc', 0.6)
         self.declare_parameter('start_pose', [0.0, 0.0, 0.0])     # world frame; map = world only when (0, 0, 0)
         self.declare_parameter('drain_w', 44.0)
@@ -27,7 +30,8 @@ class Sim2DNode(Node):
         p = lambda name: self.get_parameter(name).value
         cfg = SimConfig(start_soc=p('start_soc'), drain_w=p('drain_w'), true_turn_slip=p('true_turn_slip'),
                         linear_slip=p('linear_slip'))
-        self.sim = Sim2D(default_room(), cfg, start=Pose2D(*p('start_pose')))
+        self.sim = Sim2D(world(p('world')), cfg, start=Pose2D(*p('start_pose')))
+        self.contacts_sent = 0
         self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
         self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
         self.estop = False
@@ -42,6 +46,7 @@ class Sim2DNode(Node):
         self.p_tag = self.create_publisher(PointStamped, T.DOCK_TAG, 10)
         self.p_scan = self.create_publisher(LaserScan, T.SCAN, 10)
         self.p_truth = self.create_publisher(Odometry, T.SIM_TRUTH, 10)
+        self.p_contact = self.create_publisher(String, T.SIM_CONTACT, 50)
         self.dt, self.ticks = 0.02, 0
         self.create_timer(self.dt, self._tick)
         self.create_timer(0.1, self._scan)                         # RPLIDAR C1: 10 Hz
@@ -59,8 +64,12 @@ class Sim2DNode(Node):
         self.p_cliff.publish(Float32MultiArray(data=[0.055] * 4))
         self.p_estop.publish(Bool(data=self.estop))      # like the real one, it only reports: base_node must stop
         self.p_sense.publish(Bool(data=s.docked))
-        if self.ticks % 5 == 0:
+        if self.ticks % 10 == 0:                         # firmware: corner ToF with the battery at 5 Hz
             self.p_corner.publish(Float32MultiArray(data=s.corners()))
+        for c in s.contacts[self.contacts_sent:]:
+            self.get_logger().warn(f'contact: {c.name} ({c.kind}) {"/".join(c.bands)}')
+            self.p_contact.publish(String(data=f'{c.t:.2f} {c.name} {c.kind} {",".join(c.bands) or "-"}'))
+        self.contacts_sent = len(s.contacts)
         if self.ticks % 10 == 0:                         # the JBD BMS answers at ~5 Hz
             self._battery()
         self._tag_and_truth()

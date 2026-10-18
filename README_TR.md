@@ -30,7 +30,11 @@ luna_ws/src/luna_robot/
     battery.py            4S3P SoC tahmini; dock arama / kritik / şarj kararları ve AGX güç modu
     dock.py               SEEK → ALIGN → APPROACH → CONTACT → CHARGING → DOCKED; geri çekilme ve 3 deneme
     dock_nav.py           "dock'a git": Nav2 ile dock öncesi poza, sonra dock_node'a devir (aşağıda)
-    sim2d.py              2B oda simülatörü: LiDAR, tamponlar, dock ve etiket, kayan paletler
+    sim2d.py              2.5B oda simülatörü: LiDAR düzlemi, köşe ToF konileri, yükseklik bantlı engeller ve temas, tamponlar, dock ve etiket, kayan paletler
+    sim_worlds.py         simülatör odaları: room, toy, table, chair, dock, door (engel parkuru)
+    depth_camera.py       OAK-D Lite derinlik simülasyonu (numpy ışın izleme, MinZ, z² gürültü)
+    tof.py                köşe VL53L1X → Range / nokta yayı dönüşümü, kullanılabilir menzil
+    robot_model.py        URDF'ten sensör pozları (LiDAR, OAK-D, ToF): pozların tek yeri URDF
     face_mood.py          robot olayları → yüz olayları (tap/stroke/curious/sleep/wake/gaze); dinliyor/konuşuyor
     dock_tag.py           dock AprilTag'inin base_link konumu → /luna/dock/tag (offset, mesafe); iki kamera birleştirme
     frames.py             dönüşümler + URDF eklem zinciri (TF'in ROS'suz eşi, testler ve sim için)
@@ -43,14 +47,16 @@ luna_ws/src/luna_robot/
     assistant.py          sağlayıcıdan bağımsız bulut asistanı istemcisi (Kimi varsayılan), çevrimdışı yedek
     speech.py             cevabı seslendirme: metni temizleme, cümle kuyruğu, takılabilir TTS
   luna_robot/*_node.py  ince ROS 2 düğümleri: base, head, dock, dock_tag, face_bridge, mock_mcu, sim_camera, sim2d, dock_nav,
-                          audio, attention, assistant, speech
+                          tof_range, sim_depth, audio, attention, assistant, speech
   launch/luna.launch.py   mock:=true (varsayılan) | sim:=true | mock:=false lidar:=true; tags:=mock|sim|usb (sim:=true'da tags boş/mock); voice:= doa:= cloud:=
-  launch/luna_nav.launch.py  luna + slam_toolbox + Nav2 + dock_nav (slam.launch.py, nav2.launch.py)
+  launch/luna_nav.launch.py  luna + slam_toolbox + Nav2 + dock_nav (slam.launch.py, nav2.launch.py); obstacle_sensors:=all|lidar world:= depth:=sim|oakd|off
   config/luna.yaml        CALIBRATE işaretli değerler gerçek robotta ölçülecek
   config/cameras.yaml     usb_cam, iki Arducam B0630 (1280×720 MJPG, 15 fps)
   config/apriltag.yaml    apriltag_ros, tag36h11 ID 0, 48 mm
   config/camera_info/     NOMİNAL kamera iç parametreleri (kalibre edilecek)
   config/slam_*.yaml, nav2.yaml  harita/yerelleştirme ve navigasyon ayarları
+  config/nav2_obstacle_sensors.yaml  obstacle_sensors:=all: kamera (voxel) ve ToF katmanları, collision_monitor kaynakları
+  config/oakd.yaml        depthai_ros_driver ayarları (denenmedi)
   urdf/luna.urdf          R05 CAD'den sadeleştirilmiş çerçeveler; kameralar R06 modelinden, optik çerçeveler dahil
   tools/                  tag_sweep.py (sentetik görüntü taraması), dock_watch.py, make_tag_svg.py, sim_nav_check.py (simülatörde uçtan uca senaryo, Docker'da)
 docs/dock_tag36h11_id0_48mm.svg  dock etiketi baskı dosyası (%100 ölçek)
@@ -76,6 +82,9 @@ Teensy ile AGX arasındaki topic'lerin tek kaynağı `luna_robot/topics.py`. `fi
 | AGX | `/luna/dock/tag` | PointStamped: x = etiketin gövdeye göre yönü (sağ +, ±35° = ±1), z = ağız–burun mesafesi (m) |
 | AGX | `/joint_states` | head_node → robot_state_publisher: head_pan, head_tilt (rad); TF kameraları kafayla taşır |
 | AGX | `/luna/head/state` | Vector3 [pan°, tilt°], hız sınırından sonraki gerçek komut |
+| AGX | `/luna/tof/{fl,fr,bl,br}` · `/luna/tof/*/points` | sensor_msgs/Range · PointCloud2 yay; `tof_*` çerçevelerinde, köşe ToF'lerinden (`tof_range_node`) |
+| AGX | `/oak/points` | PointCloud2, OAK-D Lite (`depthai_ros_driver`) ya da `sim_depth_node`, optik çerçevede |
+| Sim | `/luna/sim/contact` | String "t ad tür bantlar": simülatördeki her engel teması (tampon / çarpma), yalnız test için |
 | Ses | `/luna/audio/doa` | Float32MultiArray [`base_link`'e göre yön° (+ = sol), konuşma 0/1 (susturulmuşken ya da kafa hareket ederken 0), kartın ham açısı°, kafa hareket ediyor 0/1, kafaya göre yön°] |
 | Ses | `/luna/audio/mute` → `/luna/audio/muted` | Bool komut (true = sustur) → Bool durum (1 Hz ve değişince) |
 | Ses | `/luna/audio/utterance` | String: biten konuşmanın WAV yolu (16 kHz mono), konuşma→metin eklentisi için |
@@ -658,3 +667,74 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 - **4 CPU'luk VM'de geçmiyor:** colima 4 CPU / 8 GB iken iki senaryo da işlemci yetmezliğinden düştü (TF "geleceğe uzanma", controller heartbeat; yük 23–29). Birleştirilmemiş `slam-nav2` dalı da orada geçmedi. VM 8 CPU'ya çıkarılınca (`colima start --cpu 8 --memory 8`) yük 2–4'e indi ve iki senaryo da tam geçti. Nav2 + SLAM + Python 2B simülatör için en az 8 çekirdek gerekiyor; Jetson'da gerçek sürüş ayrıca ölçülmeli.
 - **Deneme betiği notları:** etkileşimsiz bir kabukta `ros2 launch … &` SIGINT'i yok sayarak başlar; `set -m` açılıp SIGINT süreç grubuna (`kill -INT -PID`) gönderilmeli. Haritalama launch'ına `map:=/ws/maps/room` verilmezse dock pozu `~/.luna/maps/home.dock.yaml`'a yazılır ve senaryonun kayıt kontrolü düşer.
+
+## Engel algılama: LiDAR düzleminin altı (`engel-algilama` dalı, 18.10.2026)
+
+**Sorun.** RPLIDAR C1 direkte, yaklaşık 0.58 m yükseklikte tarıyor. SLAM ve dock için doğru yer (360° açık görüş), ama bu düzlemin altındaki hiçbir şey Nav2'ye ulaşmıyordu. Sehpa tablası, sandalye oturağı ve yerdeki oyuncak görünmüyordu. Onları yalnız tamponlar durduruyordu, o da dar bir bantta. Bu dalda önce simülatörde sorun gösterildi, sonra köşe ToF'leri ve yeni ön derinlik kamerası (Luxonis OAK-D Lite, sabit odak) Nav2'ye bağlandı. Aynı parkur iki yapılandırmayla koşuldu. Kamera satın alınmadı; donanım tarafı denenmedi.
+
+**Ne eklendi**
+- **2.5B simülatör** (`core/sim2d.py`): Duvarlar tam yükseklikte. Diğer engeller yükseklik bandı olan kutu (`Block`) ya da dik silindir (`Cylinder`).
+  - LiDAR yalnız tarama düzlemini kesen engelleri görür.
+  - Köşe ToF'leri koni boyunca 9 × 5 ışınla modellenir; zemin dahil en yakın dönüş alınır.
+  - Temas, robotun R07 CAD'den çıkarılan yükseklik bantlarıyla hesaplanır: palet/şasi Z0–125, P24 tampon şeritleri Z125–149, gövde Z125–345, boyun, kafa Z430–520, LiDAR direği ve C1 ~Z606, OAK-D.
+  - Yalnız tampon şeritlerine değen engel tampon bitini kaldırır. Diğer her temas robotun fark etmediği bir **çarpma** olarak `/luna/sim/contact`'a yazılır (yalnız test için).
+- **Dünyalar** (`core/sim_worlds.py`, `world:=`):
+  - `room`: eski SLAM/dock odası.
+  - `toy`: yolda 0.20 × 0.15 × 0.08 m oyuncak kutusu.
+  - `table`: 1.0 × 0.5 m sehpa. Tabla Z0.40–0.45, dört Ø0.04 ayak. Paletler ayakların arasından geçer, kafa tablanın altına sığmaz.
+  - `chair`: oturak Z0.42–0.45, dört Ø0.025 ayak. Arkalık Z0.45–0.90 tek yanda; düzlemde görünen tek parça o.
+  - `dock`: `room` + dock yolunda küçük, alçak eşyalar. Tarama `room` ile aynı, kayıtlı harita geçerli kalır.
+  - `door`: odayı bölen duvarın 0.70 m'lik kapısını 0.30 m'lik bir puf kapatıyor. Hedefe başka yol yok.
+- **URDF** (tek yer): `oakd_link` (geçici poz: gövde üstü önü, ortada, x 0.105, z 0.365, 15° aşağı; R08 CAD kesin pozu verecek), `oakd_optical_frame`, `tof_fl/fr/bl/br` (R07 koni tepeleri). `core/robot_model.py` (mevcut `frames.UrdfChain` üstüne ince katman) bu pozları simülatöre, `dock_nav_node`'a ve testlere okur. LiDAR yüksekliği ve kamera pozu artık yalnız URDF'te yazıyor; R08 sayıları gelince yalnız orası değişecek.
+- **Simüle OAK-D Lite** (`core/depth_camera.py`, `sim_depth_node`, `depth:=sim`):
+  - 64 × 48 ışın, 5 Hz, 73° × 58°, MinZ 0.35 m.
+  - Stereo gürültüsü σz = 0.0046·z² (0.15 px alt piksel, f ≈ 432 px, 75 mm taban).
+  - Gerçek konumdan zemin + duvar + engel ışın izleme yapar. `oakd_optical_frame`'de `/oak/points` yayımlar.
+- **`tof_range_node`**: `/luna/mcu/corners`'tan her sensör için iki çıktı üretir:
+  - `sensor_msgs/Range` (`/luna/tof/*`): collision_monitor için.
+  - Aynı okumanın 27°'lik nokta yayı (`/luna/tof/*/points`): maliyet haritaları için.
+  - ≥ 0.70 m okuma "daha yakında bir şey yok" demektir, yalnız temizler. 0 ya da NaN okuma yayımlanmaz.
+- **Nav2** (`config/nav2_obstacle_sensors.yaml`, `obstacle_sensors:=all`, varsayılan): yerel ve global haritaya iki katman, collision_monitor'a beş kaynak eklenir.
+  - `voxel_layer` (kamera): Z0.03–0.62 m arası işaretler, 2 m'ye kadar. Temizleme 3B'dir ve zemin noktalarını da kullanır; alçak kutunun üstünden zemine giden ışın kutuyu silmez.
+  - `tof_layer` (ObstacleLayer, ToF yayları).
+  - collision_monitor'a `pointcloud` + 4 × `range` kaynağı.
+  - `obstacle_sensors:=lidar` eski davranıştır (yalnız `/scan`). İki kipte düğümler aynıdır; yalnız parametre katmanı değişir.
+- **launch**: `luna_nav.launch.py obstacle_sensors:=all|lidar world:=… depth:=sim|oakd|off`. `depth:=oakd`, `depthai_ros_driver`'ı `sllidar_ros2` gibi isteğe bağlı içerir; paket yoksa uyarıyla atlar. Ayarları `config/oakd.yaml`'dadır ve denenmedi.
+- **`tools/sim_nav_check.py course --world … --label …`**: tek Nav2 hedefi verir (`dock`'ta "dock'a git"). Temasları, her engele en yakın plan görünüm açıklığını, süreyi ve sonucu ölçer, tablo için bir `RESULT {json}` satırı basar.
+
+**A/B sonuçları** (Docker `luna-nav:humble`, colima 8 CPU / 8 GB, `ROS_LOCALHOST_ONLY=1`, her satır ayrı bir launch)
+
+A/B_TABLE_PLACEHOLDER
+
+**Bulunan ve düzeltilen sorunlar**
+1. **Köşe ToF'leri çapraz değil, düz bakıyor.** R07'deki `FOV_R06_TOF_*` konilerinin ekseni ±Y_cad, yani robotun ileri/geri yönü. Eski simülatör çapraz modelliyordu. CAD'deki `*_L` parçaları robotun **sağında** (X < 0): `tof_fl` = `P20_F_R`. `/luna/mcu/corners` ve tampon bitleri robotun kendi sol/sağını kullanır.
+2. **Zemin ToF konisinin içinde.** Z0.101'deki VL53L1X'in varsayılan tam ROI'si (16 × 16 SPAD, 27°) zemini 0.42 m'de görür; o zaman her okuma zemin olur. Simülatör ROI'nin 16 × 4'e daraltıldığını varsayıyor (27° geniş, ≈15° dikey, zemin ≈0.77 m). Yalnız 0.70 m'den yakın okumalar engel sayılıyor. Firmware ROI ayarlamıyor ve köşeleri 5 Hz yayımlıyor (`init_tof`, `main.cpp`). Gerçek robotta `setROISize(16, 4)` gerekecek, kısa mod iyi olabilir. Zemin dönüşü gerçek sensörde ölçülmeli. Varsayım `test_obstacles.py` içinde iki testle sabitlendi (27°'de zemin 0.43 m, 15°'de > 0.70 m).
+3. **Nav2 Humble'ın `RangeSensorLayer`'ı bu yığında kullanılamadı.**
+   - Gelen her Range'i sınırsız bir listede tutuyor. Her TF araması başarısız olunca `transform_tolerance` kadar (0.5 s) bekliyor.
+   - Açılışta SLAM'in `map` çerçevesi gelmeden gelen okumalar global haritayı kalıcı olarak kilitledi: 372/372 arama başarısız, planlayıcı 0.009 Hz'e düştü. Robot, ön yüzü sehpaya 24 cm kala 3 dakika bekledi.
+   - Aynı yapılandırmayla bir başka koşu sorunsuz geçti; hata açılış sırasına bağlı.
+   - ToF bu yüzden haritalara nokta yayı olarak, TF filtreli sıradan bir ObstacleLayer üzerinden veriliyor. collision_monitor yalnız son Range'i tuttuğu için onu okumaya devam ediyor.
+4. **Range damgası.** Varış anıyla damgalanınca TF araması henüz yayımlanmamış odometriyi istiyordu. Damga artık "varış − 0.1 s" (ölçüm anı tahmini: 50 ms ölçüm bütçesi, 5 Hz okuma, micro-ROS).
+5. **Tampon kapsamı dar.**
+   - P24 şeritleri yalnız |y| ≤ 0.125 m ve Z125–149'u kaplıyor.
+   - Palet uçları (|y| 0.141–0.189) ve 0.125 m'den alçak her şey tampona değmeden çarpıyor: oyuncak kutusu, palet ucuna gelen sandalye ayağı.
+   - Bu çarpmaları güvenlik kapısı hiç görmez.
+
+**Yalnız simülasyonda olanlar / doğrulanmayanlar**
+- Gerçek sensörlerin hiçbiri denenmedi. VL53L1X (ROI, zemin dönüşü, koyu/parlak yüzey), OAK-D Lite ve `depthai_ros_driver` (parametre adları, `camera_model: OAK-D-LITE`, nokta bulutu adı) denenmedi. Sürücü imajda yok, kurulmadı.
+- **Pasif stereo:** OAK-D Lite'ta IR projektör yok. Desensiz düz yüzeylerde (beyaz duvar, düz dolap kapağı, tek renk sehpa) eşleşme bulunamayabilir; o zaman derinlik boş kalır. Model bunu içermiyor; boş görüntü burada her zaman zemin ya da engel verir. Karanlıkta da çalışmaz.
+- **~2 cm'den yassı nesneler** (kablo, çorap, ince kitap) 3 cm işaretleme eşiğinin altında kalır: kamera görmez, ToF zemin seviyesinin üstüne bakar. Bunlar hâlâ yalnız uçurum sensörü/tamponla, çoğu zaman hiç fark edilmez.
+- **Cam ve ayna:** ToF ve stereo geçer ya da yansır. Cam sehpa tablası görünmeyebilir.
+- Gövde eğimi modellenmedi: paletli robot fren/ivmede yalpalar. 1° eğim 2 m'de zemini 3.5 cm kaldırır ve sahte engel doğurabilir; kamera işaretleme menzili bu yüzden 2 m tutuldu. Gerçek robotta ölçülmeli.
+- Kafa pan ±60° temas modelinde yok (pan 0 alındı). Çarpma olarak hesaplanan bantlar CAD kutularıdır, gerçek kabuk biraz farklı.
+- Simülatörde engeller hareket etmez: robot oyuncağı itemez, değince durur.
+- Xavier'de kamera + voxel katmanı + Nav2'nin CPU yükü ölçülmedi. Simülasyonda nokta bulutu 3072 nokta / 5 Hz; gerçek sürücüde çözünürlük azaltılmalı (`config/oakd.yaml`).
+- dock_node'un son 0.6 m'lik yaklaşması maliyet haritasına bakmaz. Dock'un hemen önündeki bir eşyaya çarpar; parkurdaki eşyalar bu bölgenin dışında tutuldu.
+- **OAK-D pozu geçici.** R08 kesin pozu verince yalnız URDF değişecek, ardından bu A/B yeniden koşulmalı.
+
+**Tekrarlamak için** (konteynerde, "SLAM, Nav2 ve dock'a git" bölümündeki gibi; betikler stdin'den verildi)
+```bash
+ros2 launch luna_robot luna_nav.launch.py voice:=false world:=table obstacle_sensors:=lidar map:=/ws/maps/course_table
+python3 /ws/src/luna_robot/tools/sim_nav_check.py course --world table --label lidar --map /ws/maps/course_table
+```
+`dock` parkuru kayıtlı `room` haritasında koşulur: `slam_mode:=localization world:=dock map:=/ws/maps/room_<kip>`.

@@ -6,8 +6,13 @@ launch is up). Judges with the simulator's ground truth (/luna/sim/truth), which
       Nav2 goal behind the cabinet while the map is being built, E-stop pressed mid-drive, go-to-dock, map saved.
   python3 tools/sim_nav_check.py localization --map /ws/maps/room
       launched with slam_mode:=localization sim_soc:=0.24: the low battery must send Luna to the dock by itself.
+  python3 tools/sim_nav_check.py course --world table --label lidar
+      obstacle course (launched with world:=table, and obstacle_sensors:= the label): one Nav2 goal past the
+      obstacle (go-to-dock for world dock, on the saved map of `room` with slam_mode:=localization). Counts the
+      simulator's contacts (/luna/sim/contact) and prints one RESULT {json} line for the A/B table.
 Exit code 0 only if every check passes."""
 import argparse
+import json
 import math
 import os
 import sys
@@ -28,13 +33,20 @@ from tf2_ros import Buffer, TransformException, TransformListener
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from luna_robot import topics as T                                          # noqa: E402
 from luna_robot.core.dock_nav import Pose2D, dock_frame, parse_dock_pose, pose_error, pre_dock_pose  # noqa: E402
-from luna_robot.core.sim2d import default_room                              # noqa: E402
+from luna_robot.core.sim2d import clearance, default_room                   # noqa: E402
+from luna_robot.core.sim_worlds import world as sim_world                  # noqa: E402
 
 ROOM = default_room()
 PRE = pre_dock_pose(ROOM.dock, 0.6)
 # Behind the cabinet: unknown at the start but inside the first map's bounds (the planner can't plan to a goal
 # outside the map it has so far; the cabinet hides everything east of x ≈ 2.5 m from the start pose).
 EXPLORE = Pose2D(2.3, 1.35, 0.0)
+# Obstacle courses (core/sim_worlds.py): world → (goal in map = world, what all sensors should achieve, timeout s).
+# 'reach': get there without touching anything; 'refuse': the only way is blocked, Nav2 must give up untouched;
+# 'dock': go-to-dock past the clutter.
+GOAL = Pose2D(3.5, 0.0, 0.0)
+COURSES = {'toy': (GOAL, 'reach', 180), 'table': (GOAL, 'reach', 180), 'chair': (GOAL, 'reach', 180),
+           'door': (GOAL, 'refuse', 300), 'dock': (None, 'dock', 240)}
 
 
 def yaw_of(q):
@@ -52,7 +64,10 @@ class Check(Node):
         self.cmd_vel_count = 0
         self.wheel_target = None
         self.at_handover = None
+        self.contacts = []
+        self.obstacles, self.clear, self.trace, self.next_trace = (), {}, [], 0.0
         self.create_subscription(Odometry, T.SIM_TRUTH, self._truth, 10)
+        self.create_subscription(String, T.SIM_CONTACT, self._contact, 50)
         for topic in self.states:
             self.create_subscription(String, topic, lambda m, t=topic: self._state(t, m.data), 10)
         self.create_subscription(Twist, T.CMD_VEL, self._cmd_vel, 10)
@@ -70,6 +85,11 @@ class Check(Node):
     def _truth(self, m):
         self.truth = Pose2D(m.pose.pose.position.x, m.pose.pose.position.y, yaw_of(m.pose.pose.orientation))
         self.speed = abs(m.twist.twist.linear.x)
+        for ob in self.obstacles:                    # closest approach to each course obstacle, footprint in plan view
+            self.clear[ob.name] = min(self.clear.get(ob.name, math.inf), clearance(self.truth, ob))
+        if self.obstacles and time.monotonic() >= self.next_trace:
+            self.next_trace = time.monotonic() + 1.0
+            self.trace.append((round(self.truth.x, 2), round(self.truth.y, 2)))
 
     def _state(self, topic, value):
         if self.states[topic] != value:
@@ -77,6 +97,11 @@ class Check(Node):
             self.log(f'{topic} = {value}')
             if topic == T.NAV_DOCK_STATE and value.startswith('HANDOVER') and self.truth is not None:
                 self.at_handover = self.truth
+
+    def _contact(self, m):
+        t, name, kind, bands = m.data.split()
+        self.contacts.append({'t': float(t), 'name': name, 'kind': kind, 'bands': bands})
+        self.log(f'CONTACT {name} ({kind}, {bands})')
 
     def _cmd_vel(self, _m):
         self.cmd_vel_count += 1
@@ -162,6 +187,20 @@ class Check(Node):
             self.check(f'{label}: true final pose on the dock', d <= 0.02 and dyaw <= 0.2,
                        f'{d * 1000:.0f} mm, {math.degrees(dyaw):.1f}°')
 
+    def goal(self, pose):
+        g = NavigateToPose.Goal()
+        g.pose = PoseStamped()
+        g.pose.header.frame_id = 'map'
+        g.pose.header.stamp = self.get_clock().now().to_msg()
+        g.pose.pose.position.x, g.pose.pose.position.y = pose.x, pose.y
+        g.pose.pose.orientation.z, g.pose.pose.orientation.w = math.sin(pose.yaw / 2), math.cos(pose.yaw / 2)
+        return g
+
+    def contact_summary(self):
+        crashes = [c for c in self.contacts if c['kind'] == 'crash']
+        return (f'{len(self.contacts)} contacts ({len(crashes)} unfelt): '
+                + (', '.join(f"{c['name']}/{c['kind']}/{c['bands']}" for c in self.contacts) or 'none'))
+
     # --- scenarios ------------------------------------------------------------------------------------------------
     def mapping(self, map_base):
         self.check_bringup()
@@ -226,6 +265,7 @@ class Check(Node):
         self.call(SaveMap, '/slam_toolbox/save_map', req, timeout=90.0)
         self.check('occupancy map saved (.pgm/.yaml)',
                    self.wait(lambda: os.path.exists(map_base + '.yaml'), 30, 'map files'), f'{map_base}.pgm')
+        self.log(f'simulator contacts: {self.contact_summary()}')
         i = self.map_info
         self.log(f'map {i.width}×{i.height} cells at {i.resolution} m, origin ({i.origin.position.x:.2f}, '
                  f'{i.origin.position.y:.2f})')
@@ -243,17 +283,63 @@ class Check(Node):
         self.check_localization('on the dock')
         self.wait(lambda: self.states[T.POWER_ACTION] == 'charge', 10, 'power action charge')
         self.check('battery policy switches to charge', self.states[T.POWER_ACTION] == 'charge')
+        self.log(f'simulator contacts: {self.contact_summary()}')
+
+    def course(self, _map_base, world, label):
+        goal, expect, timeout = COURSES[world]
+        self.obstacles = tuple(o for o in sim_world(world).obstacles if o.contact)
+        self.check_bringup()
+        self.t_go, status = time.monotonic(), None
+        if expect == 'dock':
+            self.pub_go.publish(String(data='go'))
+            self.log('go-to-dock requested')
+            done = self.wait(lambda: self.states[T.DOCK_STATE] == 'CHARGING' and
+                             (self.states[T.NAV_DOCK_STATE] or '').startswith('DOCKED'), timeout, 'CHARGING + DOCKED')
+        else:
+            self.log(f'Nav2 goal {goal} past the {world}')
+            sent = self.nav.send_goal_async(self.goal(goal))
+            self.wait(sent.done, 10, 'goal response')
+            handle = sent.result()
+            result = handle.get_result_async() if handle is not None and handle.accepted else None
+            done = result is not None and self.wait(result.done, timeout, 'goal result')
+            status = result.result().status if done else None
+            if result is not None and not done:
+                handle.cancel_goal_async()
+                self.spin_for(2.0)
+        elapsed = time.monotonic() - self.t_go
+        truth = self.truth
+        reached = status == 4 if expect != 'dock' else done                     # 4 = SUCCEEDED
+        if expect == 'reach':
+            self.check(f'{world}: goal reached', reached, f'status {status}, {elapsed:.1f} s')
+        elif expect == 'refuse':
+            self.check(f'{world}: Nav2 gives up (aborted), goal not reached', status == 6 and not reached,
+                       f'status {status}, {elapsed:.1f} s')                     # 6 = ABORTED
+        else:
+            self.check(f'{world}: docked (CHARGING + DOCKED)', reached, f'{elapsed:.1f} s')
+        self.check(f'{world}: no contact with any obstacle', not self.contacts, self.contact_summary())
+        print('RESULT ' + json.dumps({
+            'world': world, 'sensors': label, 'expect': expect, 'status': status, 'reached': bool(reached),
+            'time_s': round(elapsed, 1), 'contacts': len(self.contacts),
+            'unfelt': sum(c['kind'] == 'crash' for c in self.contacts), 'items': self.contacts,
+            'final': [round(truth.x, 3), round(truth.y, 3)] if truth else None,
+            'clearance_cm': {k: round(v * 100, 1) for k, v in sorted(self.clear.items())}}), flush=True)
+        print('TRACE ' + ' '.join(f'{x},{y}' for x, y in self.trace), flush=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('scenario', choices=['mapping', 'localization'])
+    ap.add_argument('scenario', choices=['mapping', 'localization', 'course'])
     ap.add_argument('--map', default=os.path.expanduser('~/.luna/maps/home'))
+    ap.add_argument('--world', choices=sorted(COURSES), help='course only: the launch\'s world:=')
+    ap.add_argument('--label', default='', help='course only: the launch\'s obstacle_sensors:= (for RESULT)')
     args = ap.parse_args()
     rclpy.init()
     node = Check()
     try:
-        getattr(node, args.scenario)(os.path.expanduser(args.map))
+        if args.scenario == 'course':
+            node.course(os.path.expanduser(args.map), args.world, args.label)
+        else:
+            getattr(node, args.scenario)(os.path.expanduser(args.map))
     finally:
         failed = [r for r in node.results if not r[1]]
         print(f'\n{len(node.results) - len(failed)}/{len(node.results)} checks passed')

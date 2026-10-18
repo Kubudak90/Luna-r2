@@ -19,8 +19,9 @@ from typing import NamedTuple
 
 from . import kinematics as K
 from .dock_nav import Pose2D, dock_frame, wrap
+from .frames import Pose
 from .mock_plant import TAG_HALF_FOV
-from .robot_model import apply, load_frames
+from .robot_model import load_frames
 from .tof import FRAMES as TOF_FRAMES
 
 HALF_LENGTH = 0.170     # R06: 340 mm along x (track axles C = 192 mm + sprockets)
@@ -265,6 +266,23 @@ def rect_overlaps(pose, x0, x1, y0, y1, ob):
                 max(p[1] for p in local) <= y0 or min(p[1] for p in local) >= y1)
 
 
+def clearance(pose, ob, x0=-HALF_LENGTH, x1=HALF_LENGTH, y0=-HALF_WIDTH, y1=HALF_WIDTH):
+    """Plan-view gap (m) between the robot's footprint at `pose` and obstacle `ob`, 0 when they overlap."""
+    if rect_overlaps(pose, x0, x1, y0, y1, ob):
+        return 0.0
+    c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+    if isinstance(ob, Cylinder):
+        dx, dy = ob.x - pose.x, ob.y - pose.y
+        lx, ly = dx * c + dy * s, -dx * s + dy * c
+        return max(0.0, math.hypot(max(x0 - lx, 0.0, lx - x1), max(y0 - ly, 0.0, ly - y1)) - ob.r)
+    gaps = [math.hypot(max(ob.x0 - wx, 0.0, wx - ob.x1), max(ob.y0 - wy, 0.0, wy - ob.y1))
+            for wx, wy in ((pose.x + x * c - y * s, pose.y + x * s + y * c) for x in (x0, x1) for y in (y0, y1))]
+    for wx, wy in ((x, y) for x in (ob.x0, ob.x1) for y in (ob.y0, ob.y1)):
+        lx, ly = (wx - pose.x) * c + (wy - pose.y) * s, -(wx - pose.x) * s + (wy - pose.y) * c
+        gaps.append(math.hypot(max(x0 - lx, 0.0, lx - x1), max(y0 - ly, 0.0, ly - y1)))
+    return min(gaps)
+
+
 def _reach(ob):
     """Centre and plan-view radius of an obstacle, for a cheap distance pre-check."""
     if isinstance(ob, Cylinder):
@@ -312,7 +330,7 @@ def _tof_dirs(cfg, r_base):
         h = -cfg.tof_fov_h / 2 + i * cfg.tof_fov_h / (cfg.tof_rays_h - 1)
         for j in range(cfg.tof_rays_v):
             v = -cfg.tof_fov_v / 2 + j * cfg.tof_fov_v / (cfg.tof_rays_v - 1)
-            out.append(apply(r_base, (math.cos(v) * math.cos(h), math.cos(v) * math.sin(h), math.sin(v))))
+            out.append(Pose(r_base).apply((math.cos(v) * math.cos(h), math.cos(v) * math.sin(h), math.sin(v))))
     return out
 
 
