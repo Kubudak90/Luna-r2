@@ -9,7 +9,7 @@ tags:= where /luna/dock/tag comes from (default: mock with mock:=true, usb with 
   usb   the two Arducam head cameras (usb_cam) → apriltag_ros → dock_tag_node
 With sim:=true the 2D simulator replaces the mock MCU and publishes /luna/dock/tag itself, so tags:= must stay
 empty or mock.
-Obstacles below the LiDAR plane: tof_range_node always turns the corner ToF into /luna/tof/* (sensor_msgs/Range).
+Obstacles below the LiDAR plane: tof_range_node always turns the corner ToF into /luna/tof/* (Range) and point arcs.
 depth:= where /oak/points comes from (default: sim with sim:=true, else off)
   sim   sim_depth_node renders the 2.5D simulator's room (needs sim:=true)
   oakd  Luxonis OAK-D Lite via depthai_ros_driver (optional like sllidar_ros2: skipped with a warning if absent;
