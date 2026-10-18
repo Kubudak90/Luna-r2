@@ -31,8 +31,10 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from luna_robot.core.robot_model import drop_links
 from luna_robot.launch_util import IGNORE_LATE_SIGINT
 CAMERAS = ('left', 'right')
+OAK_OPTICAL_FRAMES = ('oak_rgb_camera_optical_frame', 'oak_left_camera_optical_frame', 'oak_right_camera_optical_frame')
 
 
 def _tags(context):
@@ -80,13 +82,25 @@ def _tag_pipeline(context, params, share):
     return actions
 
 
-def _depth(context, params):
+def _depth_source(context):
     sim = context.perform_substitution(LaunchConfiguration('sim')).lower() in ('true', '1')
     depth = context.perform_substitution(LaunchConfiguration('depth')) or ('sim' if sim else 'off')
     if depth not in ('sim', 'oakd', 'off'):
         raise ValueError(f'depth:={depth}: expected sim, oakd or off')
     if depth == 'sim' and not sim:
         raise ValueError('depth:=sim needs sim:=true (it renders the simulator\'s room)')
+    return depth
+
+
+def _robot_state_publisher(context, urdf):
+    if _depth_source(context) == 'oakd':     # depthai_ros_driver publishes the OAK optical frames below oakd_link
+        urdf = drop_links(urdf, OAK_OPTICAL_FRAMES)
+    return [Node(package='robot_state_publisher', executable='robot_state_publisher',
+                 parameters=[{'robot_description': urdf}], prefix=IGNORE_LATE_SIGINT, exec_name='robot_state_publisher')]
+
+
+def _depth(context, params):
+    depth = _depth_source(context)
     world = context.perform_substitution(LaunchConfiguration('sim_world'))
     if depth == 'sim':
         return [Node(package='luna_robot', executable='sim_depth_node', name='luna_sim_depth',
@@ -131,8 +145,7 @@ def generate_launch_description():
         DeclareLaunchArgument('voice', default_value='true'),
         DeclareLaunchArgument('doa', default_value='usb'),
         DeclareLaunchArgument('cloud', default_value='false'),
-        Node(package='robot_state_publisher', executable='robot_state_publisher', parameters=[{'robot_description': urdf}],
-             prefix=IGNORE_LATE_SIGINT, exec_name='robot_state_publisher'),
+        OpaqueFunction(function=_robot_state_publisher, args=[urdf]),
         Node(package='luna_robot', executable='base_node', name='luna_base', parameters=[params]),
         Node(package='luna_robot', executable='head_node', name='luna_head', parameters=[params]),
         Node(package='luna_robot', executable='dock_node', name='luna_dock',

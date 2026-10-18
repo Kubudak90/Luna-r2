@@ -5,6 +5,7 @@ and the simulator, dock_nav_node and the tests read the same numbers through loa
 A pose is (t, R) of the frame in base_link: a point p in the frame is R·p + t. Movable joints count at zero."""
 import math
 import os
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 
 from .frames import UrdfChain
@@ -38,6 +39,16 @@ def default_urdf_path():
         return os.path.normpath(src)
     from ament_index_python.packages import get_package_share_directory
     return os.path.join(get_package_share_directory('luna_robot'), 'urdf', 'luna.urdf')
+
+
+def drop_links(urdf_text, links):
+    """The URDF without these links and the joints that lead to them (for frames another node publishes)."""
+    root = ET.fromstring(urdf_text)
+    for el in list(root):
+        name = el.get('name') if el.tag == 'link' else el.find('child').get('link') if el.tag == 'joint' else None
+        if name in links:
+            root.remove(el)
+    return ET.tostring(root, encoding='unicode')
 
 
 @lru_cache(maxsize=None)

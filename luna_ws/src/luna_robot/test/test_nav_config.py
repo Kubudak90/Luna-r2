@@ -138,7 +138,7 @@ class Numbers(unittest.TestCase):
         self.assertEqual((self.slam['base_frame'], self.slam['odom_frame'], self.slam['map_frame']),
                          ('base_footprint', 'odom', 'map'))
         urdf = read('urdf/luna.urdf')
-        for frame in ('laser', 'oakd_link', 'oakd_optical_frame') + FRAMES:     # poses only there (robot_model)
+        for frame in ('laser', 'oakd_link', 'oak_rgb_camera_optical_frame') + FRAMES:   # poses only there (R08)
             self.assertIn(f'<link name="{frame}"/>', urdf)
 
     def test_slam_matches_the_rplidar_c1(self):

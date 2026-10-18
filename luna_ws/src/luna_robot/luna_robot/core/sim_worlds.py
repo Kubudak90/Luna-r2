@@ -7,7 +7,7 @@
   chair  a chair, seat Z0.42–0.45, four Ø0.025 legs, back Z0.45–0.90 on one side (the only part in the scan plane)
   dock   `room` plus small low objects on the way to the dock (same scan as `room`: its saved map still fits)
   door   a wall across the room, its 0.70 m doorway blocked by a 0.30 m ottoman: the only way to the goal is blocked
-Everything except the walls, the dock's back plate and the chair back is below the LiDAR plane (Z0.58)."""
+Everything except the walls, the dock's back plate and the chair back is below the LiDAR plane (Z0.59)."""
 import math
 
 from .dock_nav import Pose2D

@@ -17,14 +17,14 @@ from luna_robot.core.robot_model import load_frames
 from luna_robot.core.sim2d import Block, Room, box
 
 if np is not None:
-    from luna_robot.core.depth_camera import DepthConfig, depth_along, pixel_rays, render
+    from luna_robot.core.depth_camera import FRAME, DepthConfig, depth_along, pixel_rays, render
 
 FAR_DOCK = Pose2D(8.0, 4.7, math.pi / 2)
 
 
 def to_base(points):
     """Optical-frame points → base_link (robot at the world origin facing +x)."""
-    t, r = load_frames().pose('oakd_optical_frame')
+    t, r = load_frames().pose(FRAME)
     return points.astype(float) @ np.array(r).T + np.array(t)
 
 
@@ -62,7 +62,8 @@ class DepthCamera(unittest.TestCase):
         self.assertTrue(np.all((np.abs(np.abs(wall_foot[:, 1]) - 3.0) < 1e-3) | (np.abs(wall_foot[:, 0] - 6.0) < 1e-3)))
         self.assertGreater(len(floor), len(pts) / 2)
         nearest = floor[:, 0].min()
-        self.assertAlmostEqual(nearest, 0.105 + 0.365 / math.tan(math.radians(15 + 29)), delta=0.03)  # blind zone
+        cx, _, cz = load_frames().origin(FRAME)
+        self.assertAlmostEqual(nearest, cx + cz / math.tan(math.radians(15 + 29)), delta=0.03)  # blind zone
 
     def test_low_toy_box_rises_out_of_the_floor(self):
         toy = Block('toy', 1.0, -0.075, 1.2, 0.075, 0.0, 0.08)

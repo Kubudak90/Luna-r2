@@ -40,33 +40,48 @@
   <link name="camera_right_optical_frame"/>
   <joint name="camera_right_optical_joint" type="fixed"><parent link="camera_right_link"/><child link="camera_right_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
 
-  <!-- RPLIDAR C1 placeholder scan plane Z580 (R05 LiDAR check); real optical height to be verified (R08).
-       This is the only place the LiDAR pose is written: core/robot_model.py reads it for the simulator, dock_nav_node
-       and the tests. -->
+  <!-- Sensor frames from the R08 CAD (R08_Derinlik_Kamerasi_ve_LiDAR/R08_Sensor_Pozlari_URDF.md, 18.10.2026). This file is
+       the only place these poses are written: core/robot_model.py reads them for the simulator, dock_nav_node and the
+       tests; Nav2 and SLAM get them through TF.
+       RPLIDAR C1: turret axis at the datasheet laser height (29.8 mm above the C1 base, Z589.8). Yaw −90°: sllidar_ros2
+       (C1 launch, inverted=false) puts +x toward the cable exit, which points to the robot's right. -->
   <link name="laser"/>
-  <joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser"/><origin xyz="-0.070 0 0.580"/></joint>
+  <joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser"/><origin xyz="-0.0700 0.0000 0.5898" rpy="0.0000 -0.0000 -1.5708"/></joint>
 
-  <!-- Front depth camera: Luxonis OAK-D Lite (fixed focus), 91 × 28 × 17.5 mm, depth 73° × 58°, MinZ ≈ 0.35 m.
-       PROVISIONAL mount until the R08 CAD gives the real one: top front of the body, centred, 15° nose down.
-       Like the LiDAR, this pose is written only here (sim_depth_node and the 2.5D simulator read it, Nav2 gets it
-       through TF). oakd_link: x forward (depthai_ros_driver hangs its own frames below it via parent_frame). -->
+  <!-- Front depth camera: Luxonis OAK-D Lite (fixed focus) in the R08 P33 bracket. oakd_link = enclosure centre, x along
+       the optical axes, 15° nose down. The optical frames carry depthai_ros_driver's names (camera name "oak"); depth
+       is aligned to the RGB camera, so /oak/points comes in oak_rgb_camera_optical_frame. With depth:=oakd the driver
+       publishes these three frames from its EEPROM calibration below oakd_link (parent_frame), and luna.launch.py
+       drops them from this file so no frame has two parents. -->
   <link name="oakd_link"/>
-  <joint name="oakd_joint" type="fixed"><parent link="base_link"/><child link="oakd_link"/><origin xyz="0.105 0 0.365" rpy="0 0.2617993877991494 0"/></joint>
-  <link name="oakd_optical_frame"/>
-  <joint name="oakd_optical_joint" type="fixed"><parent link="oakd_link"/><child link="oakd_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
+  <joint name="oakd_link_joint" type="fixed"><parent link="base_link"/><child link="oakd_link"/><origin xyz="0.1050 0.0000 0.3650" rpy="-0.0000 0.2618 -0.0000"/></joint>
+  <link name="oak_rgb_camera_optical_frame"/>
+  <joint name="oak_rgb_camera_optical_frame_joint" type="fixed"><parent link="base_link"/><child link="oak_rgb_camera_optical_frame"/><origin xyz="0.1130 0.0000 0.3681" rpy="-1.8326 -0.0000 -1.5708"/></joint>
+  <link name="oak_left_camera_optical_frame"/>
+  <joint name="oak_left_camera_optical_frame_joint" type="fixed"><parent link="base_link"/><child link="oak_left_camera_optical_frame"/><origin xyz="0.1115 0.0375 0.3685" rpy="-1.8326 -0.0000 -1.5708"/></joint>
+  <link name="oak_right_camera_optical_frame"/>
+  <joint name="oak_right_camera_optical_frame_joint" type="fixed"><parent link="base_link"/><child link="oak_right_camera_optical_frame"/><origin xyz="0.1115 -0.0375 0.3685" rpy="-1.8326 -0.0000 -1.5708"/></joint>
 
-  <!-- Corner ToF, Pololu #3415 VL53L1X: cone apex from R07 FOV_R06_TOF_* (CAD X ±93.55, Y ∓168.88, Z 101.0).
-       Each looks straight out along ±x (27° cone), not diagonally. Robot-frame names in /luna/mcu/corners order
-       [FL, FR, BL, BR]: tof_fl = CAD *_F_R (X > 0 is the robot's LEFT), tof_fr = *_F_L, tof_bl = *_B_R, tof_br = *_B_L.
-       x along the beam: /luna/tof/* (sensor_msgs/Range) are published in these frames. -->
+  <!-- Corner ToF, Pololu #3415 VL53L1X (27° cone), chip face centre, +x along the beam: straight ahead / back, not
+       diagonal. Names follow the robot's own sides and the /luna/mcu/corners order [FL, FR, BL, BR]; the CAD part
+       suffixes are mirrored (tof_fl = CAD P20_F_R). Floor ToF, VL53L4CD (18° cone), +x straight down: tof_down_*
+       (/luna/mcu/cliff order [FL, BL, FR, BR]; CAD P20_DOWN_1 = tof_down_fr, _2 = br, _3 = fl, _4 = bl). -->
   <link name="tof_fl"/>
-  <joint name="tof_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_fl"/><origin xyz="0.16888 0.09355 0.101"/></joint>
+  <joint name="tof_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_fl"/><origin xyz="0.1689 0.0935 0.1010" rpy="-0.0000 -0.0000 0.0000"/></joint>
   <link name="tof_fr"/>
-  <joint name="tof_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_fr"/><origin xyz="0.16888 -0.09355 0.101"/></joint>
+  <joint name="tof_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_fr"/><origin xyz="0.1689 -0.0935 0.1010" rpy="-0.0000 -0.0000 0.0000"/></joint>
   <link name="tof_bl"/>
-  <joint name="tof_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_bl"/><origin xyz="-0.16888 0.09355 0.101" rpy="0 0 3.141592653589793"/></joint>
+  <joint name="tof_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_bl"/><origin xyz="-0.1689 0.0935 0.1010" rpy="0.0000 -0.0000 3.1416"/></joint>
   <link name="tof_br"/>
-  <joint name="tof_br_joint" type="fixed"><parent link="base_link"/><child link="tof_br"/><origin xyz="-0.16888 -0.09355 0.101" rpy="0 0 3.141592653589793"/></joint>
+  <joint name="tof_br_joint" type="fixed"><parent link="base_link"/><child link="tof_br"/><origin xyz="-0.1689 -0.0935 0.1010" rpy="0.0000 -0.0000 3.1416"/></joint>
+  <link name="tof_down_fl"/>
+  <joint name="tof_down_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_down_fl"/><origin xyz="0.1360 0.1085 0.0532" rpy="-0.0000 1.5708 0.0000"/></joint>
+  <link name="tof_down_fr"/>
+  <joint name="tof_down_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_down_fr"/><origin xyz="0.1360 -0.1085 0.0532" rpy="-0.0000 1.5708 0.0000"/></joint>
+  <link name="tof_down_bl"/>
+  <joint name="tof_down_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_down_bl"/><origin xyz="-0.1360 0.1085 0.0532" rpy="-0.0000 1.5708 0.0000"/></joint>
+  <link name="tof_down_br"/>
+  <joint name="tof_down_br_joint" type="fixed"><parent link="base_link"/><child link="tof_down_br"/><origin xyz="-0.1360 -0.1085 0.0532" rpy="-0.0000 1.5708 0.0000"/></joint>
 
   <link name="face_display"/>
   <joint name="face_display_joint" type="fixed"><parent link="base_link"/><child link="face_display"/><origin xyz="0.115 0 0.256" rpy="0 -0.1666 0"/></joint>

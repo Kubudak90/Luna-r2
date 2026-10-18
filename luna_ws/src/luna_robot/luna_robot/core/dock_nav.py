@@ -46,14 +46,15 @@ def dock_frame(pose, dock):
     return dx * c + dy * s, -dx * s + dy * c, wrap(pose.yaw - dock.yaw)
 
 
-def front_points(ranges, angle_min, increment, laser_x, max_range, half_angle):
+def front_points(ranges, angle_min, increment, laser_x, max_range, half_angle, laser_yaw=0.0, laser_y=0.0):
     """LaserScan ranges → (x, y) points in the base frame within ±half_angle of straight ahead and max_range.
-    The laser frame is the base frame shifted by laser_x (urdf laser_joint, no rotation)."""
+    The laser frame is the base frame shifted by (laser_x, laser_y) and turned by laser_yaw (urdf laser_joint; the
+    R08 C1 mount has yaw −90°: its +x points to the robot's right)."""
     pts = []
     for i, r in enumerate(ranges):
-        a = angle_min + i * increment
+        a = laser_yaw + angle_min + i * increment                 # beam direction in the base frame
         if 0.0 < r <= max_range and abs(wrap(a)) <= half_angle:
-            pts.append((laser_x + r * math.cos(a), r * math.sin(a)))
+            pts.append((laser_x + r * math.cos(a), laser_y + r * math.sin(a)))
     return pts
 
 

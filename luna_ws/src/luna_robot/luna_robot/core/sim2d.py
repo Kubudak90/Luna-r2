@@ -27,6 +27,8 @@ from .tof import FRAMES as TOF_FRAMES
 HALF_LENGTH = 0.170     # R06: 340 mm along x (track axles C = 192 mm + sprockets)
 HALF_WIDTH = 0.189      # R06: track band |X| 141..189 mm → 378 mm across
 LASER_X, _, LASER_Z = load_frames().origin('laser')   # urdf laser_joint: the scan plane sees only what spans it
+LASER_YAW = load_frames().yaw('laser')                # R08: −90°, the C1's +x points to the robot's right
+C1_ABOVE_PLANE = 0.0115   # RPLIDAR C1: 41.3 mm tall, laser plane 29.8 mm above its base (top Z601.3 in R08)
 BUMPER_DEPTH = 0.03     # front/rear bumper strips against a wall: this deep from the face inwards...
 BUMPER_REACH = 0.01     # ...and pressed this far before the hard contact
 WALL_HEIGHT = 2.5
@@ -37,6 +39,12 @@ BUMPER_ZONES = (                     # (bit, x0, x1, y0, y1) in base_link; bit 0
     (2, -HALF_LENGTH - BUMPER_REACH, -0.159, 0.003, 0.125),
     (3, -HALF_LENGTH - BUMPER_REACH, -0.159, -0.125, -0.003),
 )
+
+
+def beam_toward(angle, beams=500, laser_yaw=None):
+    """Index of the scan beam (angle_min = −π, laser frame) that points at `angle` in the base frame."""
+    a = angle - (LASER_YAW if laser_yaw is None else laser_yaw) + math.pi
+    return round(a / (2 * math.pi / beams)) % beams
 
 
 def box(x0, y0, x1, y1):
@@ -103,7 +111,7 @@ def robot_bands(frames=None):
         Band('neck', -0.070, 0.010, -0.060, 0.060, 0.345, 0.430),       # pan base P14_A, tilt fork P14_B
         Band('head', -0.075, 0.052, -0.122, 0.122, 0.430, 0.520),       # P11/P12 at pan 0 (it pans ±60°)
         Band('mast', -0.146, -0.087, -0.111, -0.045, 0.345, 0.550),     # LiDAR post / cable bundle
-        Band('lidar', -0.125, -0.015, -0.060, 0.060, 0.550, lz + 0.026),  # bed P16 + RPLIDAR C1 (41.3 mm, ~Z606)
+        Band('lidar', -0.125, -0.015, -0.060, 0.060, 0.550, lz + C1_ABOVE_PLANE),  # bed P16 + RPLIDAR C1
         Band('camera', cx - 0.009, cx + 0.009, -0.0455, 0.0455, cz - 0.014, cz + 0.014),  # OAK-D Lite
     )
 
@@ -348,7 +356,8 @@ class Sim2D:
         self.rng = random.Random(cfg.seed)
         self.tof_rng = random.Random(cfg.seed + 1)
         self.t = 0.0
-        self.laser_x, _, self.laser_z = frames.origin('laser')
+        self.laser_x, self.laser_y, self.laser_z = frames.origin('laser')
+        self.laser_yaw = frames.yaw('laser')
         self.scan_walls, self.scan_circles = slice_at(room, self.laser_z)
         self.bands = robot_bands(frames)
         self.tofs = [(frames.origin(f), _tof_dirs(cfg, frames.pose(f)[1])) for f in TOF_FRAMES]
@@ -456,14 +465,16 @@ class Sim2D:
         self.wh = min(c.pack_wh, self.wh + (c.charge_w if self.charging else -c.drain_w) * dt / 3600)
 
     def scan(self):
-        """RPLIDAR C1 ranges (m, inf = no return), angle_min = -pi, increment 2*pi/beams, in the laser frame.
-        Only walls and obstacles spanning the scan plane return."""
+        """RPLIDAR C1 ranges (m, inf = no return), angle_min = -pi, increment 2*pi/beams, in the laser frame (turned by
+        the urdf laser yaw). Only walls and obstacles spanning the scan plane return."""
         c, p = self.cfg, self.pose
-        lx, ly = p.x + self.laser_x * math.cos(p.yaw), p.y + self.laser_x * math.sin(p.yaw)
+        cy, sy = math.cos(p.yaw), math.sin(p.yaw)
+        lx, ly = p.x + self.laser_x * cy - self.laser_y * sy, p.y + self.laser_x * sy + self.laser_y * cy
         inc = 2 * math.pi / c.beams
         out = []
         for i in range(c.beams):
-            r = raycast(lx, ly, p.yaw - math.pi + i * inc, self.scan_walls, c.range_max, self.scan_circles)
+            r = raycast(lx, ly, p.yaw + self.laser_yaw - math.pi + i * inc, self.scan_walls, c.range_max,
+                        self.scan_circles)
             if r != math.inf and c.range_noise_m:
                 r += self.rng.gauss(0.0, c.range_noise_m)
             out.append(r)

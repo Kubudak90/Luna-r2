@@ -1,6 +1,7 @@
 """Simulated OAK-D Lite depth (passive stereo) for the 2.5D world: a low-resolution pinhole raycast against the
-floor, the walls and every obstacle, returned as points in the camera's optical frame (z out of the lens, x right,
-y down), like the driver's /oak/points. numpy only; the pose of the camera comes from the urdf oakd_optical_frame.
+floor, the walls and every obstacle, returned as points in the RGB camera's optical frame (z out of the lens, x right,
+y down), like the driver's depth-aligned /oak/points. numpy only; the pose comes from the urdf
+oak_rgb_camera_optical_frame (R08).
 
 What it models: field of view, MinZ (no depth closer than that, along the optical axis), maximum range and stereo
 depth noise growing with z² (σz = k·z²; k from 0.15 px sub-pixel disparity, f ≈ 432 px at 640 px / 73°, 75 mm
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .sim2d import WALL_HEIGHT, Block
+
+FRAME = 'oak_rgb_camera_optical_frame'    # depthai_ros_driver aligns depth to the RGB camera
 
 
 @dataclass(frozen=True)
@@ -81,8 +84,8 @@ def depth_along(origin, dirs, room):
 
 
 def render(pose, room, frames, cfg=DepthConfig(), rng=None, rays=None):
-    """Point cloud (M, 3) float32 in oakd_optical_frame for the robot at `pose` (Pose2D, world)."""
-    t_base, r_base = frames.pose('oakd_optical_frame')
+    """Point cloud (M, 3) float32 in the FRAME optical frame for the robot at `pose` (Pose2D, world)."""
+    t_base, r_base = frames.pose(FRAME)
     c, s = np.cos(pose.yaw), np.sin(pose.yaw)
     rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
     r_world = rz @ np.array(r_base)

@@ -1,7 +1,8 @@
-# slam_toolbox (Humble 2.6) for Luna's RPLIDAR C1: frame 'laser' on the mast, scan plane z 0.58 m
-# (urdf/luna.urdf laser_joint), 0.05–12 m, 10 Hz, ~500 samples per turn. Mapping mode (online, async).
+# slam_toolbox (Humble 2.6) for Luna's RPLIDAR C1: frame 'laser' on the mast, scan plane z 0.59 m, yaw −90° (R08:
+# the C1's +x points to the robot's right; TF turns the scan, urdf/luna.urdf laser_joint), 0.05–12 m, 10 Hz,
+# ~500 samples per turn. Mapping mode (online, async).
 # slam_localization.yaml is loaded on top of this file for a saved map (launch/slam.launch.py).
-# The scan plane only sees walls and tall furniture: chairs' seats, tables and toys below 0.58 m are not mapped.
+# The scan plane only sees walls and tall furniture: chairs' seats, tables and toys below 0.59 m are not mapped.
 slam_toolbox:
   ros__parameters:
     solver_plugin: solver_plugins::CeresSolver

@@ -11,9 +11,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from luna_robot.core import kinematics as K
 from luna_robot.core.dock_nav import Pose2D, pre_dock_pose
 from luna_robot.core.frames import Pose, rot_rpy
-from luna_robot.core.robot_model import Frames, load_frames
-from luna_robot.core.sim2d import (HALF_LENGTH, HALF_WIDTH, LASER_X, LASER_Z, Block, Cylinder, Room, Sim2D, SimConfig,
-                                   box, clearance, default_room, ray_enters, raycast, raycast3d, slice_at)
+from luna_robot.core.robot_model import Frames, drop_links, load_frames
+from luna_robot.core.sim2d import (HALF_LENGTH, HALF_WIDTH, LASER_X, LASER_YAW, LASER_Z, Block, Cylinder, Room, Sim2D,
+                                   SimConfig, beam_toward, box, clearance, default_room, ray_enters, raycast,
+                                   raycast3d, robot_bands, slice_at)
 from luna_robot.core.sim_worlds import WORLDS, world
 from luna_robot.core.tof import FRAMES, TofConfig, arc_points, to_range
 
@@ -54,28 +55,50 @@ class RobotModel(unittest.TestCase):
             f.pose('nowhere')
 
     def test_laser_comes_from_the_urdf(self):
-        x, y, z = load_frames().origin('laser')
-        self.assertEqual((LASER_X, LASER_Z), (x, z))
+        f = load_frames()
+        x, y, z = f.origin('laser')
+        self.assertEqual((LASER_X, LASER_Z, LASER_YAW), (x, z, f.yaw('laser')))
         self.assertEqual(y, 0.0)
-        self.assertGreater(z, 0.52)                      # above the head (Z430–520)
+        self.assertAlmostEqual(z, 0.5898)                # R08: C1 datasheet laser height
+        self.assertAlmostEqual(LASER_YAW, -math.pi / 2, places=4)   # sllidar_ros2: +x to the cable exit (robot right)
+        self.assertAlmostEqual(max(b.z1 for b in robot_bands()), 0.6013)   # R08 robot height 601.3 mm
 
-    def test_tof_frames_look_straight_out_from_the_r07_windows(self):
+    def test_r08_frames_are_all_there(self):
+        f = load_frames()
+        for name in ('oakd_link', 'oak_rgb_camera_optical_frame', 'oak_left_camera_optical_frame',
+                     'oak_right_camera_optical_frame', 'tof_down_fl', 'tof_down_fr', 'tof_down_bl', 'tof_down_br'):
+            with self.subTest(frame=name):
+                f.origin(name)
+        t, r = f.pose('tof_down_fl')
+        self.assertTrue(close((r[0][0], r[1][0], r[2][0]), (0.0, 0.0, -1.0), 1e-4))   # floor ToF look down
+
+    def test_drop_links_removes_the_frames_a_driver_publishes(self):
+        urdf = open(os.path.join(os.path.dirname(__file__), '..', 'urdf', 'luna.urdf')).read()
+        names = ('oak_rgb_camera_optical_frame', 'oak_left_camera_optical_frame', 'oak_right_camera_optical_frame')
+        f = Frames(drop_links(urdf, names))
+        for name in names:
+            with self.assertRaises(KeyError):
+                f.pose(name)
+        self.assertEqual(f.origin('oakd_link'), load_frames().origin('oakd_link'))
+        self.assertEqual(f.origin('laser'), load_frames().origin('laser'))
+
+    def test_tof_frames_look_straight_out_from_the_windows(self):
         f = load_frames()
         for name, sx, sy in (('tof_fl', 1, 1), ('tof_fr', 1, -1), ('tof_bl', -1, 1), ('tof_br', -1, -1)):
             with self.subTest(frame=name):
                 x, y, z = f.origin(name)
-                self.assertAlmostEqual(x, sx * 0.16888)
-                self.assertAlmostEqual(y, sy * 0.09355)     # tof_fl on the robot's left = CAD P20_F_R (X > 0)
+                self.assertAlmostEqual(x, sx * 0.1689)       # R08 (this branch had 0.16888 / 0.09355 from R07)
+                self.assertAlmostEqual(y, sy * 0.0935)      # tof_fl on the robot's left = CAD P20_F_R (X > 0)
                 self.assertAlmostEqual(z, 0.101)
-                self.assertAlmostEqual(abs(f.yaw(name)), 0.0 if sx > 0 else math.pi)
+                self.assertAlmostEqual(abs(f.yaw(name)), 0.0 if sx > 0 else math.pi, places=4)   # R08 rounds π
         self.assertEqual(FRAMES, ('tof_fl', 'tof_fr', 'tof_bl', 'tof_br'))
 
     def test_depth_camera_optical_axis_points_forward_and_15_deg_down(self):
-        t, r = load_frames().pose('oakd_optical_frame')
+        t, r = load_frames().pose('oak_rgb_camera_optical_frame')
         z_axis = (r[0][2], r[1][2], r[2][2])
         x_axis = (r[0][0], r[1][0], r[2][0])
-        self.assertAlmostEqual(math.degrees(math.atan2(-z_axis[2], z_axis[0])), 15.0, places=6)
-        self.assertTrue(close(x_axis, (0.0, -1.0, 0.0)))     # image x = robot's right
+        self.assertAlmostEqual(math.degrees(math.atan2(-z_axis[2], z_axis[0])), 15.0, places=2)   # R08: 4-digit rpy
+        self.assertTrue(close(x_axis, (0.0, -1.0, 0.0), 1e-4))     # image x = robot's right
         self.assertGreater(t[0], HALF_LENGTH - 0.1)
         self.assertLess(t[2], 0.43)                          # below the head
 
@@ -88,7 +111,7 @@ class Rays(unittest.TestCase):
     def test_ray_enters_blocks_and_cylinders_in_3d(self):
         top = Block('top', 1.0, -0.5, 1.5, 0.5, 0.40, 0.45)
         self.assertAlmostEqual(ray_enters(top, (0.0, 0.0, 0.42), (1.0, 0.0, 0.0)), 1.0)
-        self.assertEqual(ray_enters(top, (0.0, 0.0, 0.58), (1.0, 0.0, 0.0)), math.inf)   # the scan plane passes over
+        self.assertEqual(ray_enters(top, (0.0, 0.0, LASER_Z), (1.0, 0.0, 0.0)), math.inf)   # the scan plane passes over
         d = (math.cos(0.2), 0.0, math.sin(0.2))
         self.assertAlmostEqual(ray_enters(top, (0.6, 0.0, 0.30), d), (0.40 - 0.30) / math.sin(0.2), places=9)  # from below
         leg = Cylinder('leg', 2.0, 0.0, 0.02, 0.0, 0.40)
@@ -104,7 +127,7 @@ class Rays(unittest.TestCase):
 
     def test_lidar_plane_only_meets_what_spans_it(self):
         segs, circles = slice_at(world('table'), LASER_Z)
-        self.assertEqual(len(segs), len(world('table').walls))                 # table: nothing at 0.58 m
+        self.assertEqual(len(segs), len(world('table').walls))                 # table: nothing in the scan plane
         self.assertEqual(circles, ())
         segs, circles = slice_at(world('chair'), LASER_Z)
         self.assertEqual(len(segs), len(world('chair').walls) + 4)             # the chair back
@@ -113,7 +136,7 @@ class Rays(unittest.TestCase):
     def test_scan_goes_under_the_table(self):
         sim = Sim2D(world('table'), QUIET)
         scan = sim.scan()
-        self.assertAlmostEqual(scan[len(scan) // 2], 5.0 - LASER_X, places=6)  # straight to the far wall
+        self.assertAlmostEqual(scan[beam_toward(0.0, len(scan))], 5.0 - LASER_X, places=6)  # to the far wall
 
     def test_dock_clutter_leaves_the_scan_of_the_mapped_room_unchanged(self):
         self.assertEqual(Sim2D(default_room()).scan(), Sim2D(world('dock')).scan())
@@ -140,7 +163,7 @@ class CornerTof(unittest.TestCase):
             self.assertAlmostEqual(v, 0.30, delta=0.02)
         self.assertGreater(min(bl, br), TofConfig().max_m)
         scan = sim.scan()
-        self.assertGreater(scan[len(scan) // 2], 5.0)
+        self.assertGreater(scan[beam_toward(0.0, len(scan))], 5.0)
 
     def test_corner_frames_follow_the_robot_heading(self):
         wall = Block('box', -0.7, -0.3, -0.5, 0.3, 0.0, 0.3)

@@ -1,9 +1,9 @@
 # Overlay on config/nav2.yaml for obstacle_sensors:=all (launch/nav2.launch.py loads it after nav2.yaml, so the keys
-# here win). Adds what sits below the LiDAR plane (laser frame, ≈ 0.58 m): coffee tables, chair seats, toys.
+# here win). Adds what sits below the LiDAR plane (laser frame, 0.59 m): coffee tables, chair seats, toys.
 #   depth camera  OAK-D Lite, /oak/points (depthai_ros_driver or sim_depth_node) → voxel_layer, collision_monitor
 #   corner ToF    4 × VL53L1X (tof_range_node): arcs /luna/tof/*/points → tof_layer, Range /luna/tof/* → collision_monitor
 # Heights are in the costmap frame (floor = 0): 0.03 m keeps the noisy floor out, 0.62 m is just above the robot's
-# top (RPLIDAR C1 ≈ 0.606 m), so a table top it cannot pass under counts and a shelf above it does not.
+# top (RPLIDAR C1, 0.601 m in R08), so a table top it cannot pass under counts and a shelf above it does not.
 # The voxel layer clears in 3D: a ray that passes over a low box to the floor behind it does not erase the box.
 # Its clearing source keeps the floor points (min -0.10 m); the marking source does not.
 # The ToF go to a plain ObstacleLayer as point arcs, not to RangeSensorLayer: Humble's RangeSensorLayer queues every

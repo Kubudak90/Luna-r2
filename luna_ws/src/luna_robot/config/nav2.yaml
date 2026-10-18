@@ -9,7 +9,7 @@
 # Nav2 never publishes /luna/mcu/wheel_target or /luna/dock/cmd_vel (test/test_nav_config.py checks this).
 # "Slow near obstacles" happens twice: RPP scales speed down by costmap cost, and collision_monitor halves it
 # when scan points enter the slowdown box and caps it so a collision is ≥ 1.2 s away.
-# The LiDAR plane is at 0.58 m (urdf laser frame): obstacles lower than that are invisible to every layer in this
+# The LiDAR plane is at 0.59 m (urdf laser frame, R08: Z589.8): obstacles lower than that are invisible to every layer in this
 # file; with obstacle_sensors:=lidar the bumpers (base_node gate) are the only stop for them. obstacle_sensors:=all
 # (the default) loads config/nav2_obstacle_sensors.yaml on top: depth camera and corner ToF layers and sources.
 

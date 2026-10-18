@@ -28,7 +28,8 @@ from .core.robot_model import load_frames
 
 STATUS = {GoalStatus.STATUS_SUCCEEDED: 'succeeded', GoalStatus.STATUS_CANCELED: 'canceled'}
 POSE_MAX_AGE_S = 2.0          # map→base older than this (SLAM stopped) counts as not localized
-LASER_X = load_frames().origin('laser')[0]   # urdf laser_joint
+LASER_X, LASER_Y, _ = load_frames().origin('laser')          # urdf laser_joint
+LASER_YAW = load_frames().yaw('laser')
 WALL_RANGE_M, WALL_HALF_ANGLE = 1.0, math.radians(35)   # the wall behind the dock, seen while docked
 BACKUP_SPEED = 0.08
 
@@ -127,7 +128,8 @@ class DockNavNode(Node):
         m = self.scan
         if m is None:
             return None
-        pts = front_points(m.ranges, m.angle_min, m.angle_increment, LASER_X, WALL_RANGE_M, WALL_HALF_ANGLE)
+        pts = front_points(m.ranges, m.angle_min, m.angle_increment, LASER_X, WALL_RANGE_M, WALL_HALF_ANGLE,
+                           LASER_YAW, LASER_Y)
         return wall_normal_yaw(pts)
 
     def _tick(self):

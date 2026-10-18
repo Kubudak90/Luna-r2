@@ -1,6 +1,6 @@
 """Simulated OAK-D Lite for the 2.5D world (depth:=sim): renders the sim2d room (same `world`) from the true robot
-pose on /luna/sim/truth and publishes the points on /oak/points in oakd_optical_frame, stamped with the truth
-sample's time so TF places them where the robot's own estimate was then. Only for the simulator: the robot stack
+pose on /luna/sim/truth and publishes the points on /oak/points in oak_rgb_camera_optical_frame, stamped with the
+truth sample's time so TF places them where the robot's own estimate was then. Only for the simulator: the robot stack
 still never reads the truth itself. Model and its limits: core/depth_camera.py."""
 import numpy as np
 from nav_msgs.msg import Odometry
@@ -9,7 +9,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 
 from . import topics as T
 from .entry import run
-from .core.depth_camera import DepthConfig, pixel_rays, render
+from .core.depth_camera import FRAME, DepthConfig, pixel_rays, render
 from .core.dock_nav import Pose2D
 from .core.robot_model import load_frames
 from .core.sim_worlds import world
@@ -46,7 +46,7 @@ class SimDepthNode(Node):
         pts = render(Pose2D(m.pose.pose.position.x, m.pose.pose.position.y, float(yaw)), self.room, self.frames,
                      self.cfg, self.rng, self.rays)
         c = PointCloud2()
-        c.header.stamp, c.header.frame_id = m.header.stamp, 'oakd_optical_frame'
+        c.header.stamp, c.header.frame_id = m.header.stamp, FRAME
         c.height, c.width = 1, len(pts)
         c.fields, c.is_bigendian, c.point_step = FIELDS, False, 12
         c.row_step, c.is_dense = 12 * len(pts), True
