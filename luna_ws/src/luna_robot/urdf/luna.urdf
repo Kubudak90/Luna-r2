@@ -40,9 +40,33 @@
   <link name="camera_right_optical_frame"/>
   <joint name="camera_right_optical_joint" type="fixed"><parent link="camera_right_link"/><child link="camera_right_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
 
-  <!-- RPLIDAR C1 placeholder scan plane Z580 (R05 LiDAR check); real optical height to be verified -->
+  <!-- RPLIDAR C1 placeholder scan plane Z580 (R05 LiDAR check); real optical height to be verified (R08).
+       This is the only place the LiDAR pose is written: core/robot_model.py reads it for the simulator, dock_nav_node
+       and the tests. -->
   <link name="laser"/>
   <joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser"/><origin xyz="-0.070 0 0.580"/></joint>
+
+  <!-- Front depth camera: Luxonis OAK-D Lite (fixed focus), 91 × 28 × 17.5 mm, depth 73° × 58°, MinZ ≈ 0.35 m.
+       PROVISIONAL mount until the R08 CAD gives the real one: top front of the body, centred, 15° nose down.
+       Like the LiDAR, this pose is written only here (sim_depth_node and the 2.5D simulator read it, Nav2 gets it
+       through TF). oakd_link: x forward (depthai_ros_driver hangs its own frames below it via parent_frame). -->
+  <link name="oakd_link"/>
+  <joint name="oakd_joint" type="fixed"><parent link="base_link"/><child link="oakd_link"/><origin xyz="0.105 0 0.365" rpy="0 0.2617993877991494 0"/></joint>
+  <link name="oakd_optical_frame"/>
+  <joint name="oakd_optical_joint" type="fixed"><parent link="oakd_link"/><child link="oakd_optical_frame"/><origin rpy="-1.5707963267948966 0 -1.5707963267948966"/></joint>
+
+  <!-- Corner ToF, Pololu #3415 VL53L1X: cone apex from R07 FOV_R06_TOF_* (CAD X ±93.55, Y ∓168.88, Z 101.0).
+       Each looks straight out along ±x (27° cone), not diagonally. Robot-frame names in /luna/mcu/corners order
+       [FL, FR, BL, BR]: tof_fl = CAD *_F_R (X > 0 is the robot's LEFT), tof_fr = *_F_L, tof_bl = *_B_R, tof_br = *_B_L.
+       x along the beam: /luna/tof/* (sensor_msgs/Range) are published in these frames. -->
+  <link name="tof_fl"/>
+  <joint name="tof_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_fl"/><origin xyz="0.16888 0.09355 0.101"/></joint>
+  <link name="tof_fr"/>
+  <joint name="tof_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_fr"/><origin xyz="0.16888 -0.09355 0.101"/></joint>
+  <link name="tof_bl"/>
+  <joint name="tof_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_bl"/><origin xyz="-0.16888 0.09355 0.101" rpy="0 0 3.141592653589793"/></joint>
+  <link name="tof_br"/>
+  <joint name="tof_br_joint" type="fixed"><parent link="base_link"/><child link="tof_br"/><origin xyz="-0.16888 -0.09355 0.101" rpy="0 0 3.141592653589793"/></joint>
 
   <link name="face_display"/>
   <joint name="face_display_joint" type="fixed"><parent link="base_link"/><child link="face_display"/><origin xyz="0.115 0 0.256" rpy="0 -0.1666 0"/></joint>
