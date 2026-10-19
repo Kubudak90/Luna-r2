@@ -269,6 +269,9 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.45
+        # Planner only (RPP reads the local costmap): obstacles push the plan from 0.6 m off, so a path into a
+        # passage settles on its centre line before the obstacle instead of bending in right beside it. The bend's
+        # inside corner was where Pure Pursuit cut onto the dock course's shoe box. 0.70 m doorway: centre cost ≈ 200.
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.60
       always_send_full_costmap: true
