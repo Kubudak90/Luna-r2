@@ -245,9 +245,10 @@ global_costmap:
       # circumscribed circle, 0.254 m. With 0.01 the inscribed radius was 0.18 m: plans passed a low box 0.18–0.25 m
       # off and the turn at the end of the passage brushed it (dock course, shoe box). 0.17 + 0.14 = 0.31 ≥ 0.254 +
       # 5 cm: wherever the plan puts the centre, a turn in place keeps 5 cm from what the costmap knows (0.09 still
-      # let a corner pass at 0.6 cm). The price: the narrowest plannable passage is 2 × 0.31 m plus one 0.05 m cell
-      # between the marked cells, ≈ 0.67 m. A 0.70 m doorway stays open; the 0.68 m gap beside the shoe box opens or
-      # closes with how the grid falls, and the robot went round the cabinet instead (README_TR.md, "Engel algılama").
+      # let a corner pass at 0.6 cm). The price, measured (worlds door70/75/80): a 0.70 m doorway is closed to the
+      # planner, 0.75 m and 0.80 m are open (on paper 2 × 0.31 m + one 0.05 m cell ≈ 0.67 m, but SLAM's door jambs
+      # come out a cell thick). The 0.68 m gap beside the dock course's shoe box is closed too: the robot goes round
+      # the cabinet (README_TR.md, "Engel algılama").
       # local_costmap keeps 0.01: RPP's collision check uses the real footprint (padding there too stopped the robot
       # in that gap: "collision ahead").
       footprint_padding: 0.14

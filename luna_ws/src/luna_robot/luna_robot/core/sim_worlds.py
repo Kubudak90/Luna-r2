@@ -7,6 +7,8 @@
   chair  a chair, seat Z0.42–0.45, four Ø0.025 legs, back Z0.45–0.90 on one side (the only part in the scan plane)
   dock   `room` plus small low objects on the way to the dock (same scan as `room`: its saved map still fits)
   door   a wall across the room, its 0.70 m doorway blocked by a 0.30 m ottoman: the only way to the goal is blocked
+  door70, door75, door80   the same wall with an open doorway 0.70 / 0.75 / 0.80 m wide: which doors the planner's
+         turning margin (nav2.yaml, global footprint_padding) still lets through (0.70 m: none)
 Everything except the walls, the dock's back plate and the chair back is below the LiDAR plane (Z0.59)."""
 import math
 
@@ -57,13 +59,22 @@ def dock_room():
     return Room(r.walls, r.dock, r.obstacles + clutter)
 
 
+def _door_wall(width):
+    return box(1.95, -2.0, 2.05, -width / 2) + box(1.95, width / 2, 2.05, 2.0)
+
+
 def door_room():
-    wall = box(1.95, -2.0, 2.05, -0.35) + box(1.95, 0.35, 2.05, 2.0)
-    return Room(_open_room(*wall), DOCK, (dock_body(DOCK), Block('ottoman', 1.75, -0.40, 2.25, 0.40, 0.0, 0.30)))
+    return Room(_open_room(*_door_wall(0.70)), DOCK,
+                (dock_body(DOCK), Block('ottoman', 1.75, -0.40, 2.25, 0.40, 0.0, 0.30)))
+
+
+def doorway_room(width):
+    return Room(_open_room(*_door_wall(width)), DOCK, (dock_body(DOCK),))
 
 
 WORLDS = {'room': default_room, 'toy': toy_room, 'table': table_room, 'chair': chair_room, 'dock': dock_room,
-          'door': door_room}
+          'door': door_room, 'door70': lambda: doorway_room(0.70), 'door75': lambda: doorway_room(0.75),
+          'door80': lambda: doorway_room(0.80)}
 
 
 def world(name):

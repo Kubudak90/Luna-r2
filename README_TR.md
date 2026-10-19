@@ -705,7 +705,7 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 **A/B sonuçları** (Docker `luna-nav:humble`, colima 8 CPU / 8 GB, `ROS_LOCALHOST_ONLY=1`, her satır ayrı bir launch)
 
-Son kodla (R08 pozları, tur başı tarama damgası, slam bekçisi) 19.10.2026, 00:20–02:12 arasında koşuldu. Her koşudan önce Mac yükünün 12'nin altına inmesi beklendi, yeniden koşularda 7'nin altına. O saatlerde başka oturumların derlemeleri yükü 7–37 arasında oynatıyordu. Her koşuda Fast DDS paylaşımlı bellek artıkları temizlendi.
+Son kodla (R08 pozları, tur başı tarama damgası, slam bekçisi, planlayıcı dolgusu 0.14, kurtarmalarda yakın engelleri koruyan ağaç) 19.10.2026'da koşuldu: dock tüm sensörler 09:09–09:26, diğerleri 09:26–09:40, açık kapılar 09:44–09:47 (`door70` / `door75` / `door80` dünyaları: aynı duvar, engelsiz kapı). Her koşudan önce Mac yükünün 12'nin altına inmesi beklendi; bu sette Mac yükü 2–7'ydi. Her koşuda Fast DDS paylaşımlı bellek artıkları temizlendi.
 
 Sütunlar:
 - **Süre:** Nav2 hedefinden sonuca kadar; dock'ta `go`'dan CHARGING + DOCKED'a kadar.
@@ -714,21 +714,27 @@ Sütunlar:
 | Parkur | Sensörler | Sonuç | Süre | Temas (fark edilmeyen) | En küçük açıklık |
 |---|---|---|---|---|---|
 | Oyuncak kutusu (Z0.08) | yalnız LiDAR | **varamadı**, kutuya dayanıp kaldı | 182 s zaman aşımı | **3 (3)**, paletler | 0 |
-| | tümü | **ulaştı** | 20.7 s | **0** | kutu 29.9 cm |
-| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **4 (4)**, kafa ↔ tabla | 0 |
-| | tümü | **ulaştı**, yanından dolaştı | 43.4 s | **0** | tabla 20.6 cm, ayak 25.4 cm |
-| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | **varamadı** | 182 s zaman aşımı | **4 (3)**, ayaklar: 3 palet, 1 tampon | 0 |
-| | tümü | **ulaştı** | 30.7 s | **0** | oturak 12.6 cm, ayak 16.6 cm |
-| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED) | 248.7 s | **3 (0)**, tampon ↔ puf | 0 |
-| | tümü | **Nav2 temiz vazgeçti** (ABORTED); yeniden koşu, aşağıda | 35.7 s | **0** | puf 119.1 cm |
-| Dock yolunda eşyalar (kayıtlı harita) | yalnız LiDAR | **kenetlenmedi**, ayakkabı kutusunda takıldı | 240 s zaman aşımı | **4 (4)**, palet ↔ ayakkabı kutusu | 0 |
-| | tümü | **CHARGING + DOCKED**; yeniden koşu, aşağıda | 114.6 s | **0** | ayakkabı kutusu **1.9 cm**, oyuncak araba 22.7 cm, top 33.7 cm |
-
-- Yalnız LiDAR'la beş parkurda toplam 18 temas oldu; 14'ünü robot fark etmedi (paletler ya da kafa). Tüm sensörlerle tablodaki koşularda temas 0.
-- **Yeniden koşulanlar (kural: yükten bozulan koşu bir kez daha):**
-  - Kapı, tüm sensörler: ilk iki koşuda senaryo betiği hedefi `bt_navigator` hâlâ etkinleşirken gönderdi ve hedef kayboldu (0.0 s). Bu bir betik yarışıydı; betik artık Nav2'nin "aktif" demesini bekliyor. Tablodaki üçüncü koşu.
-  - Dock, tüm sensörler: Mac yükü 7–9 iken denetleyici 165 kez döngüsünü kaçırdı; robot 144.7 s'de kenetlendi ama ayakkabı kutusuna 2 kez değdi. Yeniden koşuda yük 13–15'ti, döngü 301 kez kaçtı; robot 4 kez değdi ve kenetlenmedi. Yük 6.6 iken yapılan üçüncü koşuda 0 temas, ama yalnız 1.9 cm açıklık vardı. R08 setinde 7.1 cm, R07 setinde 6.4 cm'ydi. Bunun yükle ilgisi olmadığı sonra anlaşıldı; kök neden, çözüm ve 7 koşuluk kanıt aşağıda, "Dock yolunda ayakkabı kutusu". Tablodaki satır o düzeltmeden sonraki settir.
-- **Eski–yeni farkı (tek satır):** Yalnız LiDAR'da temas sayıları: R07 pozlarıyla 18 (14'ü fark edilmeyen), ilk R08 setinde 16 (12), son kodla 18 (14). Tüm sensörlerle temas yük altındaki dock koşuları dışında 0. Sonuçların hiçbiri değişmedi. Tüm sensörlü süreler bu sette daha uzun (yük): sehpa 20.2 → 43.4 s, sandalye 19.2 → 30.7 s.
+| | tümü | **ulaştı** | 16.5 s | **0** | kutu 32.0 cm |
+| Sehpa (tabla Z0.40–0.45) | yalnız LiDAR | **varamadı**, altına girmeye çalıştı | 182 s zaman aşımı | **3 (3)**, kafa ↔ tabla | 0 |
+| | tümü | **ulaştı**, yanından dolaştı | 19.3 s | **0** | tabla 17.4 cm, ayak 21.9 cm |
+| Sandalye (oturak Z0.42–0.45) | yalnız LiDAR | ulaştı (şans, aşağıda) | 14.3 s | 0 | oturak **3.9 cm**, ayak 6.3 cm |
+| | tümü | **ulaştı** | 19.4 s | **0** | oturak 12.5 cm, ayak 16.6 cm |
+| Kapı, puf yolu kapatıyor (Z0.30) | yalnız LiDAR | Nav2 vazgeçti (ABORTED), ama pufu görmeden: kapıyı planlayamadı (aşağıda) | 26.6 s | 0 | puf 27.8 cm |
+| | tümü | **Nav2 temiz vazgeçti** (ABORTED) | 28.2 s | **0** | puf 135.7 cm |
+| Dock yolunda eşyalar (kayıtlı harita) | yalnız LiDAR | CHARGING + DOCKED (şans, aşağıda) | 38.0 s | 0 | ayakkabı kutusu 31.7 cm, oyuncak araba 22.8 cm, top **8.0 cm** |
+| | tümü | **CHARGING + DOCKED**, 7 koşunun 6'sında; düşen koşu yük altında TF donması (aşağıda) | 42.6–133.1 s | **0** (7 koşuda) | ayakkabı kutusu ≥ 28.9 cm, oyuncak araba ≥ 22.3 cm, top ≥ 16.3 cm |
+| Açık kapı 0.70 m (engelsiz) | yalnız LiDAR / tümü | **geçemedi**: Nav2 vazgeçti (ABORTED), planlayıcı kapıyı kapalı görüyor | 38.2 s / 38.2 s | 0 / 0 | – |
+| Açık kapı 0.75 m | yalnız LiDAR / tümü | **ulaştı** | 16.0 s / 15.9 s | 0 / 0 | – |
+| Açık kapı 0.80 m | yalnız LiDAR / tümü | **ulaştı** | 16.4 s / 16.1 s | 0 / 0 | – |
+- Tüm sensörlerle bu setteki her koşuda temas 0. Yalnız LiDAR'la oyuncak kutusunda ve sehpada 3'er temas oldu; 6'sını da robot fark etmedi (paletler ya da kafa).
+- **Yalnız LiDAR'daki üç "iyileşme" algılamadan gelmiyor.** Planlayıcı dolgusu yolları değiştirdi:
+  - Sandalyede LiDAR yalnız arkalığı ve arka ayakları görüyor. Planlayıcı onlardan 0.31 m uzak durunca robot görmediği oturağın 3.9 cm yanından geçti.
+  - Kapıda 0.70 m'lik geçit planlayıcıya kapalı. Robot kapıya 0.77 m kala "failed to create plan" ile durdu ve görünmeyen pufa hiç varmadı.
+  - Dock'ta planlayıcı baştan güney yolunu seçti, ayakkabı kutusuna hiç yaklaşmadı. Görmediği topun 8 cm yanından geçti.
+- **Önceki set (dolgu 0.01, 00:20–02:12, Mac yükü 7–37):** yalnız LiDAR'la 18 temas (14'ü fark edilmeyen), tüm sensörlerle dock dışında 0.
+  - Kapı, tüm sensörler: ilk iki koşuda senaryo betiği hedefi `bt_navigator` hâlâ etkinleşirken gönderdi ve hedef kayboldu. Bu bir betik yarışıydı; betik artık Nav2'nin "aktif" demesini bekliyor.
+  - Dock, tüm sensörler: Mac yükü 7–9 iken robot 144.7 s'de kenetlendi ama ayakkabı kutusuna 2 kez değdi. Yük 13–15 iken 4 kez değdi ve kenetlenmedi. Yük 6.6 iken 0 temas, ama yalnız 1.9 cm açıklık vardı. R08 setinde 7.1 cm, R07 setinde 6.4 cm'ydi. Önce yükten sanıldı. Kök neden ve çözüm aşağıda, "Dock yolunda ayakkabı kutusu".
+- **Eski–yeni farkı (tek satır):** Yalnız LiDAR'da temas sayıları: R07 pozlarıyla 18 (14'ü fark edilmeyen), ilk R08 setinde 16 (12), damga + bekçi setinde 18 (14), dolgu 0.14 ile 6 (6). Tüm sensörlerle temas önceki setlerde yalnız dock'ta vardı, bu sette hiç yok.
 - Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
 
 **Eski senaryolar (son kod)**
@@ -736,8 +742,17 @@ Sütunlar:
 | Kontrol | Yalnız LiDAR | Tümü |
 |---|---|---|
 | Haritalama (`sim_nav_check.py mapping`): duvardan dock ekseni öğrenme dahil | **17/17** | **17/17** |
-| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12**; ayrıca art arda 6/6 deneme | **12/12**; ayrıca art arda 6/6 deneme |
-| Birim testleri | Mac (Py 3.14) 257 test, 20'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **257/257** | |
+| Kayıtlı haritada yerelleştirme + düşük batarya (`localization`, `sim_soc:=0.24`) | **12/12** (betik düzeltmesinden sonra; aşağıda); ayrıca art arda 6/6 deneme | **12/12** (düzeltmeden önce de, sonra da); ayrıca art arda 6/6 deneme |
+| Birim testleri | Mac (Py 3.14) 260 test, 22'si numpy/PyYAML olmadığı için atlandı · Docker `colcon test` **260/260** | |
+
+- Haritalama satırı 09:26–09:29'daki set (dolgu 0.14). Yerelleştirme son kez 09:42–09:43'te koşuldu.
+- **Betik yarışı, açılış kontrolü:** dolgu 0.14 setinde yalnız LiDAR'lı yerelleştirme 11/12 kaldı. Düşen kontrol "start on the saved map": 1.8 cm, 5.0°; sınır 4.6° (0.08 rad). Bekçinin zorla dondurma denemesinde de aynı kontrol 5.4° ile düşmüştü.
+  - Mac yükü düşükken Nav2 launch'ın 4. saniyesinde etkinleşti. `dock_nav` hedefi hemen gönderdi; kontrol çalıştığında robot zaten dönüyordu.
+  - Betik SLAM pozunu en son TF'ten, gerçek konumu ise en son simülatör mesajından alıyordu. İkisinin arasındaki 0.08 s, 1 rad/s dönüşte tek başına 4.6° eder.
+  - Önceki setlerde yük yüksekti, Nav2 geç açılıyordu ve kontrol robot kalkmadan yapılıyordu.
+  - `tools/sim_nav_check.py` artık SLAM pozunu gerçek konum mesajının damgasındaki TF'ten alıyor. Düzeltmeden sonra iki kipte de 12/12.
+  - Açılışta yalnız LiDAR 0.7 cm, 1.6°; tüm sensörler 1.3 cm, 4.4°. Robot ikisinde de hareket halindeydi. Damga hizalaması zaman kaymasını kaldırdı, ama dönen robotta SLAM'in kendi açı hatası sınıra yakın kalıyor.
+  - **Açık:** bu kontrol açılış yerelleşmesini değil, kalkmış robotu ölçüyor. Sağlam çözüm, senaryoda `dock_nav`'ın kontrol bitene kadar beklemesi.
 
 **Yerelleştirme kararsızlığı: kök neden ve çözüm (19.10.2026)**
 
@@ -774,7 +789,7 @@ Kutu (Z0–0.10) dock öncesi poza giden yolun iç köşesinde. Tüm sensörlerl
   - RPP'nin çarpışma denetimi yalnız ölümcül hücreye bakar. Kutu haritadayken bile robot ancak 0–2 cm kala durur.
 - **Çözüm:**
   1. `behavior_trees/navigate_to_pose_keep_near_obstacles.xml`: Humble ağacının kopyası. Dört `ClearEntireCostmap` yerine `ClearCostmapExceptRegion` (`reset_distance` 2.0) kullanılıyor; robotun çevresindeki 2 m'lik kare korunuyor, uzaktaki izler yine siliniyor. `launch/nav2.launch.py` bunu `default_nav_to_pose_bt_xml` olarak veriyor.
-  2. Planlayıcının (global harita) ayak izi dolgusu 0.01 → **0.14**: iç yarıçap 0.31 m ≥ 0.254 + 5 cm. Plan robotun merkezini nereye koyarsa koysun, yerinde dönüş haritadaki engelden 5 cm uzak kalır.
+  2. Planlayıcının (global harita) ayak izi dolgusu 0.01 → **0.14**: iç yarıçap 0.31 m ≥ 0.254 + 5 cm. Planın geçtiği her noktada yerinde dönüş, haritada bilinen engelden 5 cm uzak kalır. RPP köşe keserse ya da engel geç görülürse bu bir garanti değil.
   3. Global şişirme yarıçapı 0.45 → 0.55: dolgulu çevrel yarıçaptan (0.45 m) büyük kalmalı.
   4. Yerel harita dolgusu 0.01'de kaldı. RPP'nin çarpışma denetimi gerçek ayak iziyle bakıyor; orada dolgu, robotu dar geçitte "collision ahead" ile durdurdu.
   5. İki test bunları sabitliyor: `test_turning_in_place_stays_inside_the_planners_obstacle_margin` ve `test_recoveries_keep_what_only_the_camera_and_tof_saw`.
@@ -783,7 +798,8 @@ Kutu (Z0–0.10) dock öncesi poza giden yolun iç köşesinde. Tüm sensörlerl
   - Global şişirme 0.60 / 2.5: fark yok.
   - Global 0.09 dolgu + yeni ağaç: 5 koşuda 0 temas, ama kutu açıklığı 0.7, 4.8, 3.9 cm. Köşe bir dönüşte kutunun 0.6 cm yanından geçti; pay yetmiyor.
 - **Bedeli:**
-  - NavFn artık işaretli hücreler arasında 2 × 0.31 m + bir 0.05 m hücre ≈ **0.67 m**'den dar boşluktan yol çizmiyor. 0.70 m'lik kapı açık kalıyor (test).
+  - **0.70 m'lik kapıdan geçemiyor.** Engelsiz 0.70 m'lik kapıda iki kipte de planlayıcı kapıyı kapalı gördü ve Nav2 vazgeçti. 0.75 ve 0.80 m'lik kapılardan iki kipte de geçti (yukarıdaki tablo). Kâğıt üstünde sınır, işaretli hücreler arasında 2 × 0.31 m + bir 0.05 m hücre ≈ 0.67 m. Ama duvar uçları haritada bir hücre kalın çıkınca 0.70 m kapanıyor. Dolgu 0.01 ile 0.70 m geometri gereği açıktı (koşulmadı).
+  - Evde 0.70–0.75 m'lik net kapı genişliği (ör. banyo kapısı) yaygınsa bu bedel kabul edilemez. O zaman ayak izine bakan bir planlayıcı gerekir (Smac Hybrid-A* / Lattice), dolgu değil.
   - Kutu ile kuzey duvar arası 0.68 m. Izgaranın düştüğü yere göre açık ya da kapalı görünüyor; koşularda hep kapalı çıktı.
   - Kutu kayıtlı haritada yok. Robot önce kuzeye yöneliyor; kutuyu kamerada görünce dolabın güneyinden dolaşıyor. Kuzeyde 15–45 s duraksıyor (yol bir o yana bir bu yana dönüyor).
   - Kenetlenen koşularda dock süresi 43–133 s (önceki setlerde 84–145 s).

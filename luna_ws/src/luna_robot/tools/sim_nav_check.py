@@ -47,7 +47,9 @@ EXPLORE = Pose2D(2.3, 1.35, 0.0)
 # 'dock': go-to-dock past the clutter.
 GOAL = Pose2D(3.5, 0.0, 0.0)
 COURSES = {'toy': (GOAL, 'reach', 180), 'table': (GOAL, 'reach', 180), 'chair': (GOAL, 'reach', 180),
-           'door': (GOAL, 'refuse', 300), 'dock': (None, 'dock', 240)}
+           'door': (GOAL, 'refuse', 300), 'dock': (None, 'dock', 240),
+           # open doorways: 0.70 m is closed to the planner by its turning margin (nav2.yaml global footprint_padding)
+           'door70': (GOAL, 'refuse', 180), 'door75': (GOAL, 'reach', 180), 'door80': (GOAL, 'reach', 180)}
 
 
 def yaw_of(q):
@@ -58,7 +60,7 @@ class Check(Node):
     def __init__(self):
         super().__init__('luna_sim_nav_check')
         self.t0 = time.monotonic()
-        self.truth, self.speed = None, 0.0
+        self.truth, self.truth_stamp, self.speed = None, None, 0.0
         self.states = {T.DOCK_STATE: None, T.NAV_DOCK_STATE: None, T.POWER_ACTION: None, T.SAFETY: None}
         self.events, self.results = [], []
         self.map_info = None
@@ -87,6 +89,7 @@ class Check(Node):
     # --- inputs ---------------------------------------------------------------------------------------------------
     def _truth(self, m):
         self.truth = Pose2D(m.pose.pose.position.x, m.pose.pose.position.y, yaw_of(m.pose.pose.orientation))
+        self.truth_stamp = Time.from_msg(m.header.stamp)
         self.speed = abs(m.twist.twist.linear.x)
         for ob in self.obstacles:                    # closest approach to each course obstacle, footprint in plan view
             self.clear[ob.name] = min(self.clear.get(ob.name, math.inf), clearance(self.truth, ob))
@@ -131,9 +134,9 @@ class Check(Node):
         self.results.append((name, bool(ok), detail))
         self.log(f'{"PASS" if ok else "FAIL"}  {name}  {detail}')
 
-    def map_pose(self):
+    def map_pose(self, at=None):
         try:
-            tf = self.tf.lookup_transform('map', 'base_footprint', Time())
+            tf = self.tf.lookup_transform('map', 'base_footprint', Time() if at is None else at)
         except TransformException:
             return None
         return Pose2D(tf.transform.translation.x, tf.transform.translation.y, yaw_of(tf.transform.rotation))
@@ -178,7 +181,14 @@ class Check(Node):
 
     def check_localization(self, label, xy_tol=0.10, yaw_tol=0.08):
         self.spin_for(1.0)
-        est, truth = self.map_pose(), self.truth
+        # SLAM's pose at the truth's own stamp, not the latest TF: after a fast Nav2 bringup the robot is already
+        # turning when the "start" check runs (1 rad/s → 4.6° per 0.08 s of skew between the two)
+        truth, stamp = self.truth, self.truth_stamp
+        est, end = None, time.monotonic() + 2.0
+        while stamp is not None and est is None and time.monotonic() < end:
+            rclpy.spin_once(self, timeout_sec=0.02)
+            est = self.map_pose(stamp)
+        est = est or self.map_pose()
         if est is None or truth is None:
             self.check(f'{label}: SLAM pose vs truth', False, 'no pose')
             return

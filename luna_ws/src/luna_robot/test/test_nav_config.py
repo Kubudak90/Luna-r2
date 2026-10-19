@@ -111,11 +111,11 @@ class Numbers(unittest.TestCase):
         pad = glob['footprint_padding']
         self.assertGreaterEqual(min(HALF_LENGTH, HALF_WIDTH) + pad, sweep + 0.05)    # 5 cm to spare
         self.assertGreater(glob['inflation_layer']['inflation_radius'], math.hypot(HALF_LENGTH + pad, HALF_WIDTH + pad))
-        # a 0.70 m doorway stays plannable wherever the 0.05 m grid falls (one free cell between the margins)
-        self.assertLess(2 * (HALF_LENGTH + pad) + glob['resolution'], 0.70)
+        # the price: doorways narrower than ≈ 0.75 m close (sim worlds door70/75/80: 0.70 closed, 0.75 and 0.80 open)
+        self.assertLess(2 * (HALF_LENGTH + pad) + glob['resolution'], 0.75)
         infl = glob['inflation_layer']
-        door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.35 - (HALF_LENGTH + pad)))
-        self.assertLess(door_cost, 253)                                 # a 0.70 m doorway stays plannable
+        door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.375 - (HALF_LENGTH + pad)))
+        self.assertLess(door_cost, 253)                                 # the middle of a 0.75 m doorway is free
 
     def test_recoveries_keep_what_only_the_camera_and_tof_saw(self):
         # ClearEntireCostmap wipes the voxel and ToF layers too: a low obstacle beside the robot is then forgotten.
