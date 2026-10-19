@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from luna_robot.core import kinematics as K
 from luna_robot.core.dock import Dock, Obs
 from luna_robot.core.dock_nav import Pose2D, front_points, pre_dock_pose, wall_normal_yaw
-from luna_robot.core.sim2d import LASER_X, Room, Sim2D, SimConfig, box, default_room, raycast
+from luna_robot.core.sim2d import LASER_X, LASER_YAW, Room, Sim2D, SimConfig, beam_toward, box, default_room, raycast
 
 SQUARE = Room(walls=box(-2.0, -2.0, 2.0, 2.0), dock=Pose2D(0.0, 1.75, math.pi / 2))
 
@@ -34,15 +34,15 @@ class Lidar(unittest.TestCase):
         scan = sim.scan()
         n = len(scan)
         self.assertEqual(n, SimConfig().beams)
-        ahead = scan[n // 2]                          # angle_min = -pi, so the middle beam looks straight ahead
-        behind = scan[0]
+        ahead = scan[beam_toward(0.0, n)]             # R08: the laser frame is turned −90°, so not the middle beam
+        behind = scan[beam_toward(math.pi, n)]
         self.assertAlmostEqual(ahead, 2.0 - LASER_X, places=6)
         self.assertAlmostEqual(behind, 2.0 + LASER_X, places=6)
 
     def test_scan_rotates_with_the_robot(self):
         sim = Sim2D(SQUARE, SimConfig(range_noise_m=0.0), start=Pose2D(1.0, 0.0, math.pi / 2))
         scan = sim.scan()
-        self.assertAlmostEqual(scan[len(scan) // 2], 2.0 - LASER_X, places=6)  # facing +y from (1, 0) → north wall
+        self.assertAlmostEqual(scan[beam_toward(0.0, len(scan))], 2.0 - LASER_X, places=6)  # facing the north wall
 
 
 class Motion(unittest.TestCase):
@@ -167,7 +167,7 @@ class DockScene(unittest.TestCase):
         d = room.dock
         sim = Sim2D(room, start=Pose2D(d.x, d.y, d.yaw - 0.15))
         c = sim.cfg
-        pts = front_points(sim.scan(), -math.pi, 2 * math.pi / c.beams, LASER_X, 1.0, math.radians(35))
+        pts = front_points(sim.scan(), -math.pi, 2 * math.pi / c.beams, LASER_X, 1.0, math.radians(35), LASER_YAW)
         self.assertGreater(len(pts), 50)
         self.assertAlmostEqual(wall_normal_yaw(pts), 0.15, delta=0.01)
 

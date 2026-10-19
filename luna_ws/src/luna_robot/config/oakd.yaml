@@ -1,0 +1,22 @@
+# depthai_ros_driver (depthai-ros 2.x, Humble) parameters for the front OAK-D Lite, used by depth:=oakd
+# (launch/luna.launch.py). NOT TRIED: the driver is not in the luna-nav:humble image and the camera is not bought.
+# Parameter names follow the depthai-ros 2.x documentation; check them against the installed version first.
+# The point cloud goes to /oak/points (pointcloud.enable:=true) in oak_rgb_camera_optical_frame (depth aligned to
+# RGB). The driver publishes its frames from the EEPROM calibration below our urdf oakd_link (parent_frame, R08 pose);
+# luna.launch.py then drops the urdf's own copies of the three optical frames.
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: RGBD
+      i_nn_type: none
+      i_enable_imu: false
+    stereo:
+      i_subpixel: true
+      i_lr_check: true
+      i_align_depth: true             # depth (and /oak/points) in the RGB optical frame, as sim_depth_node
+      i_extended_disp: false          # true lowers MinZ from ≈ 0.35 m to ≈ 0.20 m
+      # Nav2 needs a few thousand points at 5–10 Hz, not 640 × 400 at 30 Hz: decimate on the camera
+      i_enable_decimation_filter: true
+      i_decimation_filter_decimation_factor: 4
+    rgb:
+      i_fps: 10.0

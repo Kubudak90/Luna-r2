@@ -37,8 +37,15 @@ NAV_DOCK = '/luna/nav/dock'              # String: go | cancel  (Nav2 to the pre
 NAV_DOCK_STATE = '/luna/nav/dock_state'  # String: STATE or STATE:reason (core/dock_nav.py)
 NAV_PRE_DOCK = '/luna/nav/pre_dock'      # PoseStamped (map), latched: where Nav2 hands over to dock_node
 NAV_SAVE_DOCK = '/luna/nav/save_dock'    # std_srvs/Trigger: current pose = docked pose (robot on the dock)
+INITIAL_POSE = '/initialpose'            # PoseWithCovarianceStamped (map): slam_toolbox relocalizes near it
 SIM_TRUTH = '/luna/sim/truth'            # nav_msgs/Odometry, frame 'world': sim2d ground truth, for tests only
 SIM_ESTOP = '/luna/sim/estop'            # Bool: press (true) / release the simulated E-stop, for tests only
+SIM_CONTACT = '/luna/sim/contact'        # String "t name kind bands": sim2d contact with an obstacle, for tests only
+
+# Obstacle sensors below the LiDAR plane (AGX only, not in topics.h)
+TOF_RANGES = ('/luna/tof/fl', '/luna/tof/fr', '/luna/tof/bl', '/luna/tof/br')  # sensor_msgs/Range, frames tof_*
+TOF_POINTS = tuple(t + '/points' for t in TOF_RANGES)  # PointCloud2: the same reading as an arc, for the costmaps
+DEPTH_POINTS = '/oak/points'             # sensor_msgs/PointCloud2: OAK-D Lite (depthai_ros_driver) or sim_depth_node
 
 HEAD_STATE = '/luna/head/state'          # Vector3: x = pan deg, y = tilt deg, as commanded after the slew limit
 

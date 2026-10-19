@@ -1,0 +1,45 @@
+"""Corner ToF (4 × VL53L1X) for Nav2. The MCU publishes the raw readings on /luna/mcu/corners [FL, FR, BL, BR] (m);
+tof_range_node turns each one into a sensor_msgs/Range in its urdf tof_* frame (x along the beam).
+
+Usable range: the cone of a window 0.101 m above the floor reaches the floor too. With the full 16×16 SPAD ROI
+(27° × 27°) that happens 0.42 m out, so every reading would be the floor. The simulator assumes the ROI narrowed to
+16 × 4 SPADs (27° wide, ≈ 15° tall: floor from ≈ 0.77 m) and only readings below max_m count as an obstacle; a
+reading at or beyond it means "nothing nearer" (range = max_range).
+The firmware does not set that ROI yet (see README_TR.md, "Engel algılama").
+
+The costmaps get each reading as an arc of points at the measured range across the ROI width (arc_points), on
+/luna/tof/<name>/points in the sensor's frame, for a plain ObstacleLayer: it marks the arc and clears the cone up
+to it, and a "nothing nearer" reading only clears. nav2_costmap_2d's RangeSensorLayer (Humble 1.1.20) was tried
+first: it queues every Range without limit and waits transform_tolerance for each TF lookup, so the readings that
+arrive before SLAM's map frame exists (or during any TF gap) block the costmap for good (README_TR.md).
+collision_monitor still reads the Range messages; it only keeps the latest one."""
+import math
+from dataclasses import dataclass
+
+NAMES = ('fl', 'fr', 'bl', 'br')            # /luna/mcu/corners order
+FRAMES = tuple(f'tof_{n}' for n in NAMES)  # urdf frames
+
+
+@dataclass(frozen=True)
+class TofConfig:
+    fov_rad: float = math.radians(27.0)    # horizontal width of the ROI (Range.field_of_view, width of the arc)
+    min_m: float = 0.04                     # VL53L1X minimum
+    max_m: float = 0.70                     # below the floor return of the 16×4 ROI (≈ 0.77 m)
+    arc_points: int = 7                     # costmap points across the ROI width
+
+
+def to_range(raw, cfg=TofConfig()):
+    """Range to publish for one raw reading (m), or None for no message (≤ 0 or NaN: sensor dead or not ranging; a
+    broken sensor must not keep clearing the costmap). Readings ≥ max_m become max_m, closer than min_m become min_m."""
+    if raw is None or math.isnan(raw) or raw <= 0.0:
+        return None
+    if raw >= cfg.max_m:
+        return cfg.max_m
+    return max(raw, cfg.min_m)
+
+
+def arc_points(r, cfg=TofConfig()):
+    """(x, y, 0) points in the sensor frame (x along the beam) at range r across the field of view."""
+    n = cfg.arc_points
+    return [(r * math.cos(a), r * math.sin(a), 0.0)
+            for a in (-cfg.fov_rad / 2 + i * cfg.fov_rad / (n - 1) for i in range(n))]

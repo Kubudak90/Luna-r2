@@ -50,6 +50,17 @@ class Geometry(unittest.TestCase):
         self.assertIsNone(wall_normal_yaw(corner))
         self.assertIsNone(wall_normal_yaw([(0.4, 0.0), (0.4, 0.1)]))
 
+    def test_front_points_from_a_turned_laser(self):
+        # R08: the C1's +x points to the robot's right (yaw −90°); straight ahead is then laser angle +90°.
+        inc = 2 * math.pi / 8
+        ranges = [1.0] * 8
+        ranges[6] = 0.5                                              # -pi + 6 * pi/4 = +pi/2 in the laser frame
+        pts = front_points(ranges, -math.pi, inc, laser_x=-0.07, max_range=0.8, half_angle=math.radians(20),
+                           laser_yaw=-math.pi / 2, laser_y=0.01)
+        self.assertEqual(len(pts), 1)
+        self.assertAlmostEqual(pts[0][0], 0.43, places=9)
+        self.assertAlmostEqual(pts[0][1], 0.01, places=9)
+
     def test_front_points_from_a_scan_in_the_laser_frame(self):
         # 8 beams from -pi, laser 0.07 m behind the centre; only the forward sector within range is kept.
         inc = 2 * math.pi / 8

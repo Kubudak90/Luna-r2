@@ -24,10 +24,12 @@ from . import topics as T
 from .entry import run
 from .core.dock_nav import (DockNav, DockNavConfig, NavObs, Pose2D, format_dock_pose, front_points, parse_dock_pose,
                             wall_normal_yaw, wrap)
+from .core.robot_model import load_frames
 
 STATUS = {GoalStatus.STATUS_SUCCEEDED: 'succeeded', GoalStatus.STATUS_CANCELED: 'canceled'}
 POSE_MAX_AGE_S = 2.0          # map→base older than this (SLAM stopped) counts as not localized
-LASER_X = -0.070              # urdf laser_joint
+LASER_X, LASER_Y, _ = load_frames().origin('laser')          # urdf laser_joint
+LASER_YAW = load_frames().yaw('laser')
 WALL_RANGE_M, WALL_HALF_ANGLE = 1.0, math.radians(35)   # the wall behind the dock, seen while docked
 BACKUP_SPEED = 0.08
 
@@ -41,6 +43,7 @@ class DockNavNode(Node):
         self.declare_parameter('dock_pose', [math.nan] * 3)           # [x, y, yaw] in map, if there is no dock_file
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('nav2_manager', 'lifecycle_manager_navigation')
         p = lambda name: self.get_parameter(name).value
         self.map_frame, self.base_frame = p('map_frame'), p('base_frame')
         self.dock_file = os.path.expanduser(p('dock_file'))
@@ -52,6 +55,12 @@ class DockNavNode(Node):
         self.tf_listener = TransformListener(self.tf, self)
         self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.backup_client = ActionClient(self, BackUp, 'backup')
+        # A goal sent while Nav2 is still activating is queued and accepted seconds later. Its stamp then predates the
+        # TF data in bt_navigator / planner_server, which look the robot pose up at that stamp and fail forever (seen
+        # in the simulator: go-to-dock never left the start). So goals wait for the lifecycle manager's "active".
+        self.nav2_active = False
+        self.active_client = self.create_client(Trigger, f"/{p('nav2_manager')}/is_active")
+        self.active_call = None
         self.scan = None
         self.create_subscription(LaserScan, T.SCAN, lambda m: setattr(self, 'scan', m), qos_profile_sensor_data)
         self.create_subscription(String, T.DOCK_STATE, lambda m: setattr(self.obs, 'dock_state', m.data), 10)
@@ -119,10 +128,12 @@ class DockNavNode(Node):
         m = self.scan
         if m is None:
             return None
-        pts = front_points(m.ranges, m.angle_min, m.angle_increment, LASER_X, WALL_RANGE_M, WALL_HALF_ANGLE)
+        pts = front_points(m.ranges, m.angle_min, m.angle_increment, LASER_X, WALL_RANGE_M, WALL_HALF_ANGLE,
+                           LASER_YAW, LASER_Y)
         return wall_normal_yaw(pts)
 
     def _tick(self):
+        self._nav2_ready()                                            # keeps asking until Nav2 is active
         self.obs.pose = self._pose()
         self.obs.wall_yaw = self._wall_yaw() if self.obs.dock_state in ('CONTACT', 'CHARGING') else None
         self.obs.nav_result = self.results.popleft() if self.results else None
@@ -154,8 +165,17 @@ class DockNavNode(Node):
             self.get_logger().warn(f'charging at {cmd[1]}, far from the stored dock {self.nav.dock}: not learned '
                                    '(localization off, or the dock moved: then call ' + T.NAV_SAVE_DOCK + ')')
 
+    def _nav2_ready(self):
+        if not self.nav2_active and self.active_client.service_is_ready():
+            if self.active_call is not None and self.active_call.done():
+                result = self.active_call.result()
+                self.nav2_active, self.active_call = bool(result and result.success), None
+            elif self.active_call is None:
+                self.active_call = self.active_client.call_async(Trigger.Request())
+        return self.nav2_active and self.client.server_is_ready()
+
     def _navigate(self, seq, pose):
-        if not self.client.server_is_ready():
+        if not self._nav2_ready():
             self.get_logger().warn('Nav2 navigate_to_pose is not available yet', throttle_duration_sec=10.0)
             self.results.append((seq, 'unavailable'))
             return

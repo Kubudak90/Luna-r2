@@ -1,0 +1,38 @@
+<!--
+  Nav2 Humble's navigate_to_pose_w_replanning_and_recovery.xml with one change: the recoveries clear the costmaps
+  except a 2 m square around the robot (ClearCostmapExceptRegion) instead of entirely (ClearEntireCostmap).
+  ClearEntireCostmap also wipes the depth camera's voxel layer and the corner ToF layer. A low obstacle beside the robot
+  or in the camera's blind zone is then forgotten and cannot be seen again before the robot turns onto it: on the dock
+  course every contact with the shoe box followed such a clear (README_TR.md, "Engel algılama"). The LiDAR re-marks
+  walls within one 360° turn, so keeping what is near loses nothing; marks further away are still cleared.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearCostmapExceptRegion name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_except_global_costmap" reset_distance="2.0"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearCostmapExceptRegion name="ClearLocalCostmap-Context" service_name="local_costmap/clear_except_local_costmap" reset_distance="2.0"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearCostmapExceptRegion name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_except_local_costmap" reset_distance="2.0"/>
+            <ClearCostmapExceptRegion name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_except_global_costmap" reset_distance="2.0"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
