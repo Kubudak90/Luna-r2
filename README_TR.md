@@ -699,6 +699,7 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
   - `tof_layer` (ObstacleLayer, ToF yayları).
   - collision_monitor'a `pointcloud` + 4 × `range` kaynağı.
   - `obstacle_sensors:=lidar` eski davranıştır (yalnız `/scan`). İki kipte düğümler aynıdır; yalnız parametre katmanı değişir.
+  - İki kipte de: planlayıcının ayak izi dolgusu 0.14 (yerinde dönüşe 5 cm pay) ve kurtarmalarda robotun çevresini koruyan davranış ağacı. Neden ve kanıt aşağıda, "Dock yolunda ayakkabı kutusu".
 - **launch**: `luna_nav.launch.py obstacle_sensors:=all|lidar world:=… depth:=sim|oakd|off`. `depth:=oakd`, `depthai_ros_driver`'ı `sllidar_ros2` gibi isteğe bağlı içerir; paket yoksa uyarıyla atlar. Ayarları `config/oakd.yaml`'dadır ve denenmedi.
 - **`tools/sim_nav_check.py course --world … --label …`**: tek Nav2 hedefi verir (`dock`'ta "dock'a git"). Temasları, her engele en yakın plan görünüm açıklığını, süreyi ve sonucu ölçer, tablo için bir `RESULT {json}` satırı basar.
 
@@ -726,7 +727,7 @@ Sütunlar:
 - Yalnız LiDAR'la beş parkurda toplam 18 temas oldu; 14'ünü robot fark etmedi (paletler ya da kafa). Tüm sensörlerle tablodaki koşularda temas 0.
 - **Yeniden koşulanlar (kural: yükten bozulan koşu bir kez daha):**
   - Kapı, tüm sensörler: ilk iki koşuda senaryo betiği hedefi `bt_navigator` hâlâ etkinleşirken gönderdi ve hedef kayboldu (0.0 s). Bu bir betik yarışıydı; betik artık Nav2'nin "aktif" demesini bekliyor. Tablodaki üçüncü koşu.
-  - Dock, tüm sensörler: Mac yükü 7–9 iken denetleyici 165 kez döngüsünü kaçırdı; robot 144.7 s'de kenetlendi ama ayakkabı kutusuna 2 kez değdi. Yeniden koşuda yük 13–15'ti, döngü 301 kez kaçtı; robot 4 kez değdi ve kenetlenmedi. Yük 6.6 iken yapılan üçüncü koşu tablodadır: 0 temas, ama yalnız 1.9 cm açıklık. R08 setinde 7.1 cm, R07 setinde 6.4 cm'ydi. Kutu, dock öncesi poza dönüşün tam iç köşesinde. Pure Pursuit köşeyi kesiyor ve denetleyici yavaşlayınca kutuya sürtüyor. **Açık:** dock yaklaşmasında alçak engellere pay yetersiz (şişirme / RPP çarpışma bakış mesafesi ayarı gerekiyor).
+  - Dock, tüm sensörler: Mac yükü 7–9 iken denetleyici 165 kez döngüsünü kaçırdı; robot 144.7 s'de kenetlendi ama ayakkabı kutusuna 2 kez değdi. Yeniden koşuda yük 13–15'ti, döngü 301 kez kaçtı; robot 4 kez değdi ve kenetlenmedi. Yük 6.6 iken yapılan üçüncü koşuda 0 temas, ama yalnız 1.9 cm açıklık vardı. R08 setinde 7.1 cm, R07 setinde 6.4 cm'ydi. Bunun yükle ilgisi olmadığı sonra anlaşıldı; kök neden, çözüm ve 7 koşuluk kanıt aşağıda, "Dock yolunda ayakkabı kutusu". Tablodaki satır o düzeltmeden sonraki settir.
 - **Eski–yeni farkı (tek satır):** Yalnız LiDAR'da temas sayıları: R07 pozlarıyla 18 (14'ü fark edilmeyen), ilk R08 setinde 16 (12), son kodla 18 (14). Tüm sensörlerle temas yük altındaki dock koşuları dışında 0. Sonuçların hiçbiri değişmedi. Tüm sensörlü süreler bu sette daha uzun (yük): sehpa 20.2 → 43.4 s, sandalye 19.2 → 30.7 s.
 - Dock eşyaları, yalnız LiDAR'lı robotun gerçekten izlediği yola konuldu. Eşyalar dock_node'un son 0.6 m'lik yaklaşma bölgesinin dışında.
 
@@ -750,13 +751,65 @@ R08'den sonra yalnız LiDAR'lı yerelleştirme üç kez düşmüştü (5/12, 8/1
 - **Çözüm:**
   1. Tarama damgası tur başında (`sim2d_node.py`).
   2. Yerelleştirmede `transform_timeout` 0.5 → 1.5 s (`config/slam_localization.yaml`): 1–2 s'lik takılmalar Nav2'yi artık durdurmuyor.
-  3. **`slam_watchdog_node`** güvenlik ağı: tarama akarken `map→odom` 4 s ilerlemezse slam_toolbox'ın parametre servisini yokluyor. Cevap gelirse düğüm yalnız yavaştır, dokunulmaz. 8 s cevap gelmezse öldürüyor; launch onu aynı kayıtlı haritayla yeniden başlatıyor (`respawn`). Bekçi son sağlam `map→odom` ile güncel odometriden hesaplanan konumu `/initialpose` ile geri veriyor. Yalnız yerelleştirmede çalışıyor; haritalamada yeniden başlatma, çıkarılan haritayı kaybettirirdi.
+  3. **`slam_watchdog_node`** güvenlik ağı: tarama akarken `map→odom` 4 s ilerlemezse slam_toolbox'ın parametre servisini yokluyor. Cevap gelirse düğüm yalnız yavaştır, dokunulmaz. 8 s cevap gelmezse öldürüyor; launch onu aynı kayıtlı haritayla yeniden başlatıyor (`respawn`). Cevap verse de `map→odom` 20 s ilerlemezse yine yeniden başlatıyor (bir kez görüldü: yürütücü canlı, taramalar işlenmiyor). Yoklama, takılmanın ne zamandır sürdüğünü sıfırlamıyor. `/tf` kuyruğu 10'a indi: 100'lük kuyrukla bekçi yük altında 90 s geriden geliyordu. Her 10 s'de bir durumunu yazıyor (`WATCH: map→odom last moved … ago`). Bekçi son sağlam `map→odom` ile güncel odometriden hesaplanan konumu `/initialpose` ile geri veriyor. Yalnız yerelleştirmede çalışıyor; haritalamada yeniden başlatma, çıkarılan haritayı kaybettirirdi.
   4. Aynı açılış yarışı iki yerde daha vardı ve kapatıldı: `dock_nav_node` ile senaryo betiği hedefi artık Nav2'nin yaşam döngüsü yöneticisi "aktif" demeden göndermiyor.
 - **Kanıt:**
   - Damga düzeltmesinden önce aynı yük düzeyinde 38 denemede 6 düşüş vardı (4 kilitlenme, 2 takılma). Düzeltmeden sonra **12/12 art arda geçti**: yalnız LiDAR 6/6, tüm sensörler 6/6. Hiç kilitlenme olmadı, bekçi bir kez bile devreye girmedi.
-  - Bekçi ayrıca zorla denendi: koşunun 25. saniyesinde slam_toolbox SIGSTOP ile kalıcı dondurulunca 12 s içinde yeniden başlattı ve konumu (2.27, 1.39) geri verdi; senaryo **12/12** geçti.
+  - Bekçi ayrıca zorla denendi: koşunun 25. saniyesinde slam_toolbox SIGSTOP ile kalıcı dondurulunca 12 s içinde yeniden başlattı ve konumu (2.27, 1.39) geri verdi; senaryo **12/12** geçti. Son bekçiyle (tüm sensörler) tekrarlandı: 28. s'de yokladı, 36. s'de yeniden başlattı, 39–41. s'de konumu (2.97, 1.10) üç kez verdi, sonra yeniden WATCH. Robot başlangıçtan 54 s sonra kenetlendi, dock'ta SLAM ile gerçek konum farkı 1.8 cm. Senaryo 11/12 geçti. Düşen kontrol dondurmadan önceydi: açılışta SLAM konumu 5.4° saptı, sınır 4.6° (0.08 rad).
   - Düzeltmeden önceki doğrulamada da (bekçi vardı, damga eskiydi) bekçi gerçek bir kilitlenmeyi iki kez yeniden başlatarak kurtardı. Ama ikinci örnek de açılışta kilitlendiği için 42 s sürdü ve o deneme düştü.
 - **Gerçek robotta:** sllidar_ros2 zaten tur başında damgalıyor. Ama Python base_node'un odometri TF'i yük altında 0.1 s'den fazla gecikirse aynı bekleme yolu açılır. Bekçi bu yüzden kalıyor. Xavier'de TF gecikmesi ölçülmeli.
+
+**Dock yolunda ayakkabı kutusu: kök neden ve çözüm (19.10.2026)**
+
+Kutu (Z0–0.10) dock öncesi poza giden yolun iç köşesinde. Tüm sensörlerle bile 2 ve 4 temaslı koşular, temassızlarda 0.7–4.8 cm'lik açıklıklar görülmüştü.
+- **Hangi evre?** Temasların ve düşük açıklıkların hepsi NAVIGATE evresinde oldu: Nav2 robotu dock öncesi poza (dock'un 0.6 m önü) götürürken. dock_node'un son 0.6 m'lik düz yaklaşmasında hiç olmadı; kutu o bölgenin dışında. Robot her seferinde kutunun yanında yerinde dönerken köşesiyle kutuya girdi.
+- **Kök neden 1: kurtarmalar alçak engeli unutturuyordu.**
+  - Nav2 Humble'ın varsayılan davranış ağacı takılınca iki maliyet haritasını da tamamen siler (`ClearEntireCostmap`).
+  - LiDAR duvarları bir turda geri yazar. 0.10 m'lik kutuyu ise yalnız kamera görür, o da kutu önündeyse ve 0.35 m'den uzaktaysa. Kutu robotun yanındayken silinince bir daha görülemedi, robot üstüne döndü.
+  - Ölçüm: temaslı her koşuda temastan birkaç saniye önce bir temizleme vardı (ör. temizleme 30. s, temas 34. s).
+  - "Voxel ışın temizlemesi kutuyu siliyor" varsayımı elendi: maliyet haritası yoklaması, temizleme olmayınca kutunun robot yanından geçerken ölümcül kaldığını gösterdi.
+- **Kök neden 2: dönüş süpürmesi planlayıcının payından büyük.**
+  - Paletli robot yerinde dönerken köşeleri hypot(0.17, 0.189) = 0.254 m yarıçaplı daire süpürür.
+  - NavFn yolu engelden yalnız iç yarıçap kadar uzak tutuyordu: 0.17 + 0.01 dolgu = 0.18 m. RPP yön değiştirmek için yerinde dönünce köşe kutuya 7 cm'ye kadar girebiliyordu.
+  - RPP'nin çarpışma denetimi yalnız ölümcül hücreye bakar. Kutu haritadayken bile robot ancak 0–2 cm kala durur.
+- **Çözüm:**
+  1. `behavior_trees/navigate_to_pose_keep_near_obstacles.xml`: Humble ağacının kopyası. Dört `ClearEntireCostmap` yerine `ClearCostmapExceptRegion` (`reset_distance` 2.0) kullanılıyor; robotun çevresindeki 2 m'lik kare korunuyor, uzaktaki izler yine siliniyor. `launch/nav2.launch.py` bunu `default_nav_to_pose_bt_xml` olarak veriyor.
+  2. Planlayıcının (global harita) ayak izi dolgusu 0.01 → **0.14**: iç yarıçap 0.31 m ≥ 0.254 + 5 cm. Plan robotun merkezini nereye koyarsa koysun, yerinde dönüş haritadaki engelden 5 cm uzak kalır.
+  3. Global şişirme yarıçapı 0.45 → 0.55: dolgulu çevrel yarıçaptan (0.45 m) büyük kalmalı.
+  4. Yerel harita dolgusu 0.01'de kaldı. RPP'nin çarpışma denetimi gerçek ayak iziyle bakıyor; orada dolgu, robotu dar geçitte "collision ahead" ile durdurdu.
+  5. İki test bunları sabitliyor: `test_turning_in_place_stays_inside_the_planners_obstacle_margin` ve `test_recoveries_keep_what_only_the_camera_and_tof_saw`.
+- **Denenip bırakılanlar:**
+  - İki haritaya da 0.09 dolgu: robot 0.68 m'lik geçitte "collision ahead" deyip takıldı.
+  - Global şişirme 0.60 / 2.5: fark yok.
+  - Global 0.09 dolgu + yeni ağaç: 5 koşuda 0 temas, ama kutu açıklığı 0.7, 4.8, 3.9 cm. Köşe bir dönüşte kutunun 0.6 cm yanından geçti; pay yetmiyor.
+- **Bedeli:**
+  - NavFn artık işaretli hücreler arasında 2 × 0.31 m + bir 0.05 m hücre ≈ **0.67 m**'den dar boşluktan yol çizmiyor. 0.70 m'lik kapı açık kalıyor (test).
+  - Kutu ile kuzey duvar arası 0.68 m. Izgaranın düştüğü yere göre açık ya da kapalı görünüyor; koşularda hep kapalı çıktı.
+  - Kutu kayıtlı haritada yok. Robot önce kuzeye yöneliyor; kutuyu kamerada görünce dolabın güneyinden dolaşıyor. Kuzeyde 15–45 s duraksıyor (yol bir o yana bir bu yana dönüyor).
+  - Kenetlenen koşularda dock süresi 43–133 s (önceki setlerde 84–145 s).
+
+**Kanıt** (dolgu 0.14 + yeni ağaç, tüm sensörler, kayıtlı harita, 19.10.2026 09:09–09:26). Her koşudan önce Mac yükünün 12'nin, yüklü koşularda 14'ün altına inmesi beklendi. Yük için VM içinde 6 × `yes` çalıştırıldı. VM yükü koşu sonundaki 1 dk ortalaması.
+
+| Koşu | Yapay yük | VM yükü | Sonuç | Süre | Temas | Ayakkabı kutusu | Oyuncak araba | Top | Yol |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | yok | 1.5 | **CHARGING + DOCKED** | 133.1 s | **0** | 29.7 cm | 22.3 cm | 17.0 cm | kuzey → güney |
+| 2 | yok | 1.1 | **CHARGING + DOCKED** | 96.2 s | **0** | 31.6 cm | 23.3 cm | 18.3 cm | kuzey → güney |
+| 3 | yok | 1.5 | **CHARGING + DOCKED** | 90.7 s | **0** | 35.5 cm | 26.0 cm | 21.5 cm | kuzey → güney |
+| 4 | 6 × `yes` | 8.7 | **kenetlenmedi**, TF donması (aşağıda) | 240 s zaman aşımı | **0** | 92.7 cm | 223.5 cm | 127.1 cm | kuzeyde kaldı |
+| 4b (yeniden koşu) | 6 × `yes` | 6.2 | **CHARGING + DOCKED** | 42.6 s | **0** | 28.9 cm | 22.8 cm | 17.3 cm | baştan güney |
+| 5 | 6 × `yes` | 8.6 | **CHARGING + DOCKED** | 78.9 s | **0** | 30.9 cm | 23.1 cm | 16.3 cm | kuzey → güney |
+| 6 | 6 × `yes` | 8.0 | **CHARGING + DOCKED** | 71.6 s | **0** | 32.7 cm | 24.5 cm | 26.6 cm | kuzey → güney |
+
+- 7 koşunun hepsinde temas 0. Kenetlenen 6 koşuda en küçük açıklık: ayakkabı kutusu **28.9 cm**, oyuncak araba 22.3 cm, top 16.3 cm. Önceki sette ayakkabı kutusu 1.9 cm'ydi.
+- Yük altında 4 koşudan 3'ü kenetlendi.
+- **Açık: yük altında Nav2'nin TF görüşü dondu (koşu 4).** Neden dock payı değil.
+  - Robot 27. s'den sonra kuzeyde, (0.97, 1.34)'te kaldı.
+  - 46. s'den sonra denetleyici her döngüde "Transform data too old (map → odom)" dedi. Aradaki fark saniyede 1 s büyüdü (0.6 → 36 s), yani yerel haritanın TF tamponuna 45. s'den sonra yeni `map→odom` hiç girmedi.
+  - Aynı sırada odom→base o tampona ulaşmaya devam etti. slam_watchdog da `/tf`'te `map→odom` damgasının her 0.1 s'de ilerlediğini yazdı: slam_toolbox yayımlıyordu.
+  - Fast DDS hata yazmadı. Kopukluk tek bir yayımcı → abone hattında görünüyor. Bekçi yayın tarafını izlediği için bunu göremez.
+  - 7 dock koşusunda bir kez görüldü; kural gereği yeniden koşuldu (4b).
+  - 0.09 dolgulu önceki setin dockP_4'ünde benzer bir uyarı vardı. Ama orada fark yalnız 1.4 s'ydi ve geçti; robot planlayıcı hatası ile yük altında başarısız kurtarmalar yüzünden ("Current footprint not available") takılmıştı. Orada bekçinin susması doğruydu.
+  - Gerçek robotta tüketici tarafında bir TF tazelik denetimi düşünülmeli.
 
 **Bulunan ve düzeltilen sorunlar**
 1. **Köşe ToF'leri çapraz değil, düz bakıyor.** R07'deki `FOV_R06_TOF_*` konilerinin ekseni ±Y_cad, yani robotun ileri/geri yönü. Eski simülatör çapraz modelliyordu. CAD'deki `*_L` parçaları robotun **sağında** (X < 0): `tof_fl` = `P20_F_R`. `/luna/mcu/corners` ve tampon bitleri robotun kendi sol/sağını kullanır.
