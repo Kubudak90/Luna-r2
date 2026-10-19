@@ -49,12 +49,19 @@ class Watchdog(unittest.TestCase):
         self.assertEqual(dog.restarts, 1)
 
     def test_slow_but_answering_slam_is_not_restarted(self):
-        dog = SlamWatchdog()
-        acts = run(dog, 0.0, 60.0, lambda t: min(t, 20.0), answers=True)
+        dog = SlamWatchdog()                                         # stalls for 12 s, answering, then moves again
+        acts = run(dog, 0.0, 60.0, lambda t: t if t < 20.0 or t > 32.0 else 20.0, answers=True)
         self.assertNotIn('restart', [a for _, a in acts])
         probes = [t for t, a in acts if a == 'probe']
         self.assertGreater(len(probes), 1)
         self.assertGreater(min(b - a for a, b in zip(probes, probes[1:])), CFG.stall_s)   # not a probe storm
+
+    def test_answering_but_never_localizing_slam_is_restarted(self):
+        dog = SlamWatchdog()                                         # executor alive, scans no longer processed
+        acts = run(dog, 0.0, 60.0, lambda t: min(t, 20.0), answers=True)
+        restarts = [t for t, a in acts if a == 'restart']
+        self.assertEqual(len(restarts), 1)
+        self.assertAlmostEqual(restarts[0], 20.0 + CFG.dead_stall_s, delta=1.0)
 
     def test_no_pose_until_the_respawned_node_listens(self):
         dog = SlamWatchdog()

@@ -10,8 +10,9 @@ inside slam_toolbox / tf2 was not found, so this watchdog stays as the safety ne
 with SIGSTOP mid-run: restarted, relocalized, docked):
 
   WATCH       map→odom's stamp has not moved for stall_s (or never appeared within startup_s) while scans arrive
-              → 'probe' (ask slam_toolbox's parameter service)
-  PROBING     it answers → only slow (a long scan match, a loaded CPU): WATCH again, from now; no answer within
+              → 'probe' (ask slam_toolbox's parameter service), at most once per stall_s; not moved for
+              dead_stall_s → 'restart' even if it answers (seen once: executor alive, scans no longer processed)
+  PROBING     it answers → only slow (a long scan match, a loaded CPU): WATCH again; no answer within
               probe_timeout_s → 'restart' (kill slam_toolbox; the launch respawns it with the same saved map)
   RESTARTED   once the new slam_toolbox listens on /initialpose → 'initial_pose' (hand it the robot's pose:
               the last good map→odom composed with the current odometry), repeated pose_repeats times
@@ -29,6 +30,7 @@ class WatchdogConfig:
     stall_s: float = 4.0          # slam_toolbox's own hiccups stay under ~2 s (transform_timeout is 1.5 s)
     scan_fresh_s: float = 1.0     # only a stall while scans arrive is slam_toolbox's fault
     probe_timeout_s: float = 8.0  # a locked node never answers; a busy one answers after its scan (1–2 s)
+    dead_stall_s: float = 20.0    # no scan matching takes this long: answering or not, it no longer localizes
     respawn_s: float = 3.0        # the killed node's /initialpose subscription can linger in the graph this long
     pose_period_s: float = 1.0
     pose_repeats: int = 3
@@ -52,6 +54,8 @@ class SlamWatchdog:
         self.last_pose_at = -math.inf
         self.restarts = 0
         self.started = None
+        self.last_probe_at = -math.inf
+        self.watch_from = 0.0         # start of the current watch (after a recovery); probes do not reset it
 
     def step(self, now, advanced_at, scan_at, slam_listening, answered_at=None):
         """advanced_at: wall time map→odom's stamp last moved (None before the first one); scan_at: last /scan
@@ -61,16 +65,20 @@ class SlamWatchdog:
         if self.started is None:
             self.started = now
         if self.state == 'WATCH':
-            scans = scan_at is not None and now - scan_at < c.scan_fresh_s
-            ref = self.started if advanced_at is None else max(advanced_at, self.since)
+            if scan_at is None or now - scan_at >= c.scan_fresh_s:
+                return []
+            ref = self.started if advanced_at is None else max(advanced_at, self.watch_from)
             limit = c.startup_s if advanced_at is None else c.stall_s
-            if scans and now - ref > limit:
+            if now - ref > limit + (c.dead_stall_s - c.stall_s):
+                return self._restart(now)
+            if now - ref > limit and now - self.last_probe_at > c.stall_s:
+                self.last_probe_at = now
                 self._go('PROBING', now)
                 return ['probe']
             return []
         if self.state == 'PROBING':
             if answered_at is not None and answered_at >= self.since:
-                self._go('WATCH', now)                       # alive, just slow: give it another stall_s
+                self._go('WATCH', now)                       # alive, just slow: the stall keeps counting
                 return []
             return self._restart(now) if now - self.since > c.probe_timeout_s else []
         if self.state == 'RESTARTED':
@@ -86,6 +94,7 @@ class SlamWatchdog:
         # RECOVERING
         if advanced_at is not None and advanced_at > self.since:
             self._go('WATCH', now)
+            self.watch_from = now
             return []
         if now - self.since > c.grace_s:
             return self._restart(now)

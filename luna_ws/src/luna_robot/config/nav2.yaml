@@ -208,7 +208,7 @@ local_costmap:
       height: 3
       resolution: 0.05
       footprint: "[[0.17, 0.189], [0.17, -0.189], [-0.17, -0.189], [-0.17, 0.189]]"
-      footprint_padding: 0.01
+      footprint_padding: 0.01               # the real footprint for RPP's collision checks (global_costmap: 0.09)
       plugins: [obstacle_layer, inflation_layer]
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
@@ -227,7 +227,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.45           # circumscribed radius 0.254 m + margin
+        inflation_radius: 0.45           # > padded circumscribed radius hypot(0.26, 0.279) = 0.38 m
       always_send_full_costmap: true
 
 global_costmap:
@@ -239,7 +239,14 @@ global_costmap:
       robot_base_frame: base_footprint
       transform_tolerance: 0.5
       footprint: "[[0.17, 0.189], [0.17, -0.189], [-0.17, -0.189], [-0.17, 0.189]]"
-      footprint_padding: 0.01
+      # Padding 0.09 for the planner only. NavFn plans for a point and treats the inscribed circle (min half side +
+      # padding) as an obstacle, but Luna turns in place (RPP rotate_to_heading) and its corners sweep the
+      # circumscribed circle, 0.254 m. With 0.01 the inscribed radius was 0.18 m: plans passed a low box 0.18–0.25 m
+      # off and the turn at the end of the passage brushed it once pose and control lagged (dock course, shoe box:
+      # 2 and 4 contacts under load). 0.17 + 0.09 = 0.26 ≥ 0.254: wherever the plan puts the centre, turning in
+      # place clears what the costmap knows. local_costmap keeps 0.01: RPP's collision check then uses the real
+      # footprint and a 0.68 m passage stays drivable (padding 0.09 there too blocked it: "collision ahead").
+      footprint_padding: 0.09
       resolution: 0.05
       track_unknown_space: true
       plugins: [static_layer, obstacle_layer, inflation_layer]

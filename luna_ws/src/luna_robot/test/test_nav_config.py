@@ -2,6 +2,7 @@
 only through /cmd_vel, i.e. base_node's mux and safety gate. The YAML checks need PyYAML (present wherever ROS is;
 skipped on a bare Mac Python). Run from luna_ws/src/luna_robot:  python3 -m unittest discover -s test"""
 import ast
+import math
 import os
 import re
 import sys
@@ -100,6 +101,19 @@ class Numbers(unittest.TestCase):
                 self.assertEqual(fp, want)
         self.assertAlmostEqual(2 * HALF_LENGTH, 0.340)
         self.assertAlmostEqual(2 * HALF_WIDTH, 0.378)
+
+    def test_turning_in_place_stays_inside_the_planners_obstacle_margin(self):
+        # NavFn (global costmap) treats cells within the inscribed radius (min half side + padding) as obstacles; RPP
+        # turns Luna in place, sweeping the unpadded circumscribed circle: the first must cover the second (dock
+        # course, shoe box). The controller's local costmap keeps the real footprint for its collision checks.
+        sweep = math.hypot(HALF_LENGTH, HALF_WIDTH)
+        glob = self.p('global_costmap', 'global_costmap', 'ros__parameters')
+        pad = glob['footprint_padding']
+        self.assertGreaterEqual(min(HALF_LENGTH, HALF_WIDTH) + pad, sweep)
+        self.assertGreater(glob['inflation_layer']['inflation_radius'], math.hypot(HALF_LENGTH + pad, HALF_WIDTH + pad))
+        self.assertLessEqual(2 * (HALF_LENGTH + pad), 0.68 - 0.1)       # the planner still fits beside the shoe box
+        local = self.p('local_costmap', 'local_costmap', 'ros__parameters')
+        self.assertLessEqual(local['footprint_padding'], 0.02)
 
     def test_speed_limits_stay_inside_the_base_limits(self):
         lim = K.DriveLimits()

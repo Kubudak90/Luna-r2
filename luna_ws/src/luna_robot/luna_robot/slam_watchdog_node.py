@@ -53,7 +53,8 @@ class SlamWatchdogNode(Node):
         self.dog = SlamWatchdog(WatchdogConfig(stall_s=p('stall_s')))
         self.map_odom = self.odom_base = None
         self.map_odom_stamp, self.advanced_at, self.scan_at = None, None, None
-        self.create_subscription(TFMessage, '/tf', self._tf, 100)
+        # A short queue: under CPU load a deep one fell 90 s behind and the stall was noticed that late.
+        self.create_subscription(TFMessage, '/tf', self._tf, 10)
         self.create_subscription(LaserScan, T.SCAN, lambda m: setattr(self, 'scan_at', time.monotonic()),
                                  qos_profile_sensor_data)
         self.pub_pose = self.create_publisher(PoseWithCovarianceStamped, T.INITIAL_POSE, 10)
@@ -81,7 +82,7 @@ class SlamWatchdogNode(Node):
                 self.probe.call_async(GetParameters.Request(names=['mode'])).add_done_callback(self._answered)
             elif action == 'restart':
                 pids = slam_pids()
-                self.get_logger().error(f'slam_toolbox is locked up (no map→odom, no answer): restarting it '
+                self.get_logger().error(f'slam_toolbox no longer localizes (map→odom stuck): restarting it '
                                         f'(pid {pids}, restart #{self.dog.restarts})')
                 for pid in pids:
                     os.kill(pid, signal.SIGKILL)
