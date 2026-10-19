@@ -61,6 +61,7 @@ class SlamWatchdogNode(Node):
         self.probe = self.create_client(GetParameters, '/slam_toolbox/get_parameters')
         self.answered_at = None
         self.create_timer(0.5, self._tick)
+        self.create_timer(10.0, self._status)
 
     def _tf(self, m):
         map_frame, odom_frame, base_frame = self.frames
@@ -88,6 +89,12 @@ class SlamWatchdogNode(Node):
                     os.kill(pid, signal.SIGKILL)
             elif action == 'initial_pose':
                 self._send_pose()
+
+    def _status(self):
+        now = time.monotonic()
+        age = lambda t: '-' if t is None else f'{now - t:.1f} s'
+        self.get_logger().info(f'{self.dog.state}: map→odom last moved {age(self.advanced_at)} ago, last scan '
+                               f'{age(self.scan_at)} ago, {self.dog.restarts} restart(s)')
 
     def _answered(self, future):
         if future.result() is not None:
