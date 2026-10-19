@@ -115,6 +115,17 @@ class Numbers(unittest.TestCase):
         infl = glob['inflation_layer']
         door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.35 - (HALF_LENGTH + pad)))
         self.assertLess(door_cost, 253)                                 # a 0.70 m doorway stays plannable
+
+    def test_recoveries_keep_what_only_the_camera_and_tof_saw(self):
+        # ClearEntireCostmap wipes the voxel and ToF layers too: a low obstacle beside the robot is then forgotten.
+        tree = read('behavior_trees/navigate_to_pose_keep_near_obstacles.xml')
+        self.assertNotIn('<ClearEntireCostmap', tree)
+        self.assertEqual(tree.count('<ClearCostmapExceptRegion'), 4)
+        for costmap in ('local_costmap', 'global_costmap'):
+            self.assertIn(f'service_name="{costmap}/clear_except_{costmap}"', tree)
+        self.assertIn('navigate_to_pose_keep_near_obstacles.xml', read('launch/nav2.launch.py'))
+        self.assertIn('nav2_clear_costmap_service_bt_node',
+                      self.p('bt_navigator', 'ros__parameters', 'plugin_lib_names'))
         local = self.p('local_costmap', 'local_costmap', 'ros__parameters')
         self.assertLessEqual(local['footprint_padding'], 0.02)
 

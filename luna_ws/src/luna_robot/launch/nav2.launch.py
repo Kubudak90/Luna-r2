@@ -32,6 +32,7 @@ REMAPS = {
 
 
 OBSTACLE_SENSORS = {'lidar': [], 'all': ['nav2_obstacle_sensors.yaml']}    # overlays on params_file
+BT_XML = 'navigate_to_pose_keep_near_obstacles.xml'
 
 
 def servers(context, share):
@@ -39,6 +40,8 @@ def servers(context, share):
     if sensors not in OBSTACLE_SENSORS:
         raise ValueError(f'obstacle_sensors:={sensors}: expected {" or ".join(OBSTACLE_SENSORS)}')
     params = [LaunchConfiguration('params_file')] + [os.path.join(share, 'config', f) for f in OBSTACLE_SENSORS[sensors]]
+    # Recoveries keep the costmaps near the robot: low obstacles only the camera / ToF saw are not forgotten
+    params.append({'default_nav_to_pose_bt_xml': os.path.join(share, 'behavior_trees', BT_XML)})
     return [Node(package=pkg, executable=name, name=name, parameters=params, remappings=REMAPS.get(name, []),
                  prefix=IGNORE_LATE_SIGINT, exec_name=name)
             for name, pkg in SERVERS.items()]
