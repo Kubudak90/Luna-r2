@@ -81,18 +81,28 @@ luna_stt:                    # speech-to-text on the robot; the WAV is deleted o
 luna_assistant:
   ros__parameters:
     cloud_enabled: false     # owner's consent; launch: cloud:=true. Without it nothing leaves the robot.
-    provider: kimi
-    base_url: https://api.moonshot.ai/v1
-    model: kimi-k2.6         # "Kimi 2.8" is not in the official model list (2026-10-17): confirm the ID
-    api_key_env: MOONSHOT_API_KEY
-    api_key_file: ~/.config/luna/moonshot_api_key   # outside the repo, chmod 600; never commit a key
+    provider: kimi-code      # the owner's Kimi Code membership: the API comes with it (key from kimi.com/code/console)
+    base_url: https://api.kimi.com/coding/v1   # overseas per the docs: https://api.kimi.ai/coding/v1
+    model: kimi-for-coding   # = K2.8 Preview; thinking disabled below → K2.8 Preview without thinking (fastest reply)
+    api_key_env: KIMI_API_KEY
+    api_key_file: ~/.config/luna/kimi_api_key   # outside the repo, chmod 600; never commit a key
     extra_body_json: '{"thinking": {"type": "disabled"}}'
+    # Kimi Open Platform instead (pay as you go; its K2 series retires end of 2026-12):
+    #   provider: kimi, base_url: https://api.moonshot.ai/v1, model: kimi-k2.6, api_key_env: MOONSHOT_API_KEY
     max_completion_tokens: 300
     timeout_s: 15.0
     deadline_s: 30.0
     retries: 2
     history_turns: 6
     speak_offline_replies: true
+    router_enabled: true     # quick model first; hard questions (free rules, or the quick model's [DÜŞÜN]) → think_*
+    router_long_words: 25    # a question longer than this goes to the thinking model
+    think_filler: Hmm, bir düşüneyim.   # said first, only if the thinking model can be asked
+    think_model: ''          # '' = same model with thinking on (K2.8 Preview); k3 / k3.1-pro are heavier on quota
+    think_extra_body_json: '{"reasoning_effort": "low"}'   # Kimi Code: low | high | max (default max: slow)
+    think_max_completion_tokens: 4000   # includes the reasoning tokens
+    think_timeout_s: 30.0
+    think_deadline_s: 45.0
 
 luna_speech:
   ros__parameters:

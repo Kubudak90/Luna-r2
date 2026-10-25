@@ -107,21 +107,21 @@ class Client(unittest.TestCase):
         self.assertEqual(c.ask('merhaba').reason, 'no_key')
         self.assertEqual(transport.calls, [])
 
-    def test_request_matches_kimi_chat_completions(self):
+    def test_request_matches_kimi_code_chat_completions(self):
         c, transport, _ = client(ok('Merhaba!'), timeout_s=12.0)
         reply = c.ask('merhaba Luna')
         self.assertEqual((reply.text, reply.source, reply.reason), ('Merhaba!', 'cloud', None))
         call = transport.calls[0]
-        self.assertEqual(call['url'], 'https://api.moonshot.ai/v1/chat/completions')
+        self.assertEqual(call['url'], 'https://api.kimi.com/coding/v1/chat/completions')
         self.assertEqual(call['headers']['Authorization'], f'Bearer {KEY}')
         self.assertEqual(call['headers']['Content-Type'], 'application/json')
         body = call['body']
-        self.assertEqual(body['model'], 'kimi-k2.6')
+        self.assertEqual(body['model'], 'kimi-for-coding')            # K2.8 Preview
         self.assertEqual(body['thinking'], {'type': 'disabled'})          # spoken replies: no slow reasoning pass
         self.assertEqual(body['messages'][0]['role'], 'system')
         self.assertEqual(body['messages'][-1], {'role': 'user', 'content': 'merhaba Luna'})
         self.assertIn('max_completion_tokens', body)
-        self.assertNotIn('temperature', body)                             # fixed by K2.6; other values are errors
+        self.assertNotIn('temperature', body)                             # fixed by the model; other values are errors
         self.assertEqual(call['timeout'], 12.0)
 
     def test_other_openai_compatible_provider(self):

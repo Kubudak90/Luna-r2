@@ -1,12 +1,15 @@
 """Provider-agnostic cloud assistant client for heavy questions (OpenAI-compatible chat completions).
 
-Default provider: Kimi (Moonshot AI). Official docs read 2026-10-17 (platform.moonshot.ai → platform.kimi.ai):
-POST https://api.moonshot.ai/v1/chat/completions, `Authorization: Bearer <key>`, reply in
-choices[0].message.content. Models listed then: kimi-k3, kimi-k2.7-code(-highspeed), kimi-k2.6. There is no
-"Kimi 2.8" in the official list, so the model is a parameter. kimi-k2.6 can switch thinking off
-({"thinking": {"type": "disabled"}}), which keeps a spoken reply quick; its temperature/top_p are fixed by the API
-(other values are errors), so none are sent. Errors (docs "Common Error Codes"): 429 engine_overloaded /
-rate_limit_reached and 500/503 are worth retrying, 429 exceeded_current_quota, 400, 401, 403, 404 are not.
+Default provider: the owner's Kimi Code membership (its API comes with the subscription; key from the Kimi Code
+Console). Docs read 2026-10-25 (kimi.com/code/docs/en/kimi-code/models.html): OpenAI-compatible
+POST https://api.kimi.com/coding/v1/chat/completions (overseas: https://api.kimi.ai/coding/v1), `Authorization:
+Bearer <key>`, reply in choices[0].message.content. Model `kimi-for-coding` is K2.8 Preview; with thinking disabled
+({"thinking": {"type": "disabled"}}) K3, K2.8 Preview and K2.7 Code Highspeed are all served by K2.8 Preview without
+thinking, which keeps a spoken reply quick. The Kimi Open Platform (https://api.moonshot.ai/v1, pay as you go) works
+the same way; its K2 series (kimi-k2.6, kimi-k2.7-code) is to be retired at the end of December 2026. Temperature and
+top_p are fixed by these models (other values are errors), so none are sent. Errors (Open Platform docs "Common
+Error Codes"; the Kimi Code API's own error bodies are not documented): 429 engine_overloaded / rate_limit_reached
+and 500/503 are worth retrying, 429 exceeded_current_quota, 400, 401, 403, 404 are not.
 
 Safety rules kept here:
 - No request leaves the robot unless `enabled` (the owner's consent) is set AND a key is present.
@@ -40,11 +43,11 @@ BREAKER_REASONS = {'network', 'server', 'rate_limit', 'auth', 'quota'}
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    name: str = 'kimi'
-    base_url: str = 'https://api.moonshot.ai/v1'
-    model: str = 'kimi-k2.6'
-    api_key_env: str = 'MOONSHOT_API_KEY'
-    api_key_file: str = '~/.config/luna/moonshot_api_key'
+    name: str = 'kimi-code'
+    base_url: str = 'https://api.kimi.com/coding/v1'
+    model: str = 'kimi-for-coding'
+    api_key_env: str = 'KIMI_API_KEY'
+    api_key_file: str = '~/.config/luna/kimi_api_key'
     extra_body: dict = field(default_factory=lambda: {'thinking': {'type': 'disabled'}})
     max_completion_tokens: int = 300
 
@@ -186,6 +189,10 @@ class AssistantClient:
         """The last cloud answer was never heard (dropped for a newer question): keep that pair out of the context."""
         del self.history[-2:]
 
+    def can_try(self):
+        """A request would go out now: consent, a key and the breaker closed (worth saying "let me think" first)."""
+        return bool(self.enabled and self._key) and (self._open_until is None or self._clock() >= self._open_until)
+
     def ask(self, text):
         """Blocking; call from a worker thread. Returns None for empty input, else a Reply (never raises for
         network or API trouble)."""
@@ -244,7 +251,7 @@ class AssistantClient:
         if not isinstance(content, str) or not content.strip():
             return None
         content = content.strip()
-        # reasoning_content (thinking models) is neither spoken nor kept: kimi-k2.6 drops old reasoning by default.
+        # reasoning_content (thinking models) is neither spoken nor kept; with thinking disabled there is none.
         self.history += [user, {'role': 'assistant', 'content': content}]
         self.history = self.history[-2 * self.policy.history_turns:] if self.policy.history_turns > 0 else []
         self._failures = 0
