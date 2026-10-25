@@ -579,6 +579,8 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 ### Bulut asistanı ve anahtar
 
+> **25.10.2026 güncellemesi: varsayılan sağlayıcı artık Kimi Code üyeliği.** Üyelikte API dahil; anahtar [Kimi Code Console](https://www.kimi.com/code/console)'dan alınır. Model `kimi-for-coding`; bu K2.8 Preview'dir. Düşünme kapalı istek, düşünmesiz K2.8 Preview'e gider; sesli cevapta ilk kelime en çabuk bunda gelir. Hızlı sürüm `kimi-for-coding-highspeed` (K2.7 Code Highspeed) yalnız düşünme açıkken hızlıdır, kotayı 3 kat harcar ve Pro+/Allegretto+ planı ister; düşünme kapalıyken o da K2.8 Preview'e düşer. Adres `https://api.kimi.com/coding/v1`; belgeye göre yurt dışı için `https://api.kimi.ai/coding/v1`. Kaynak: kimi.com/code/docs/en/kimi-code/models.html (25.10.2026). Anahtar `KIMI_API_KEY` ortam değişkeninde ya da `~/.config/luna/kimi_api_key` dosyasında olmalı (`chmod 600`). Aşağıdaki kurallar (onay, anahtarın depoda olmaması, maskeleme, yeniden deneme) aynen geçerli. Açık platform (`api.moonshot.ai`, `kimi-k2.6`) `luna.yaml`'da yorum olarak duruyor; K2 serisi Aralık 2026 sonunda kaldırılacak. **Kimi Code API'siyle gerçek bir çağrı yapılmadı** (Luna için anahtar yok). Düşünmeyi kapatan alanın bu uç noktada da `{"thinking": {"type": "disabled"}}` olduğu ve hata gövdelerinin biçimi doğrulanmadı.
+
 - **Sağlayıcıdan bağımsız:** OpenAI uyumlu `POST {base_url}/chat/completions` kullanılıyor. Varsayılan sağlayıcı Kimi (Moonshot AI): `https://api.moonshot.ai/v1`, `Authorization: Bearer <anahtar>`. Kaynak: resmî Kimi API belgeleri (platform.moonshot.ai → platform.kimi.ai), 17.10.2026'da yalnız okundu.
 - **"Kimi 2.8" resmî model listesinde yok.** 17.10.2026 itibarıyla listede `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` ve `kimi-k2.6` var.
   - Varsayılan `kimi-k2.6`: düşünme modu kapatılabiliyor (`{"thinking": {"type": "disabled"}}`), bu da sesli cevabı hızlandırır.
@@ -1048,3 +1050,37 @@ Konteynerde, "SLAM, Nav2 ve dock'a git" bölümündeki gibi (`colcon build` kuru
 bash /ws/src/luna_robot/tools/voice_check/live.sh short
 ```
 Kayıtlar `/tmp/voice_check`'e yazılır. `short` olmadan C–F adımları da koşulur (yaklaşık 2 dakika).
+
+## Yönlendirici: önce hızlı model, zor soruda düşünen model (25.10.2026)
+
+Kimi Code üyeliğiyle aynı model iki biçimde kullanılır (`core/router.py`, `assistant_node`):
+
+| Yol | Model | Ne zaman |
+|---|---|---|
+| hızlı | `kimi-for-coding`, düşünme kapalı (düşünmesiz K2.8 Preview), en fazla 300 token | her soru önce buraya |
+| düşünen | aynı model, düşünme açık, `reasoning_effort: "low"`, en fazla 4000 token (düşünme dahil), 30 s / 45 s | kural ön elemesi ya da hızlı modelin `[DÜŞÜN]` cevabı |
+
+- **Bedava kural ön elemesi:** soru doğrudan düşünen modele gider, hızlı modele hiç sorulmaz.
+  - **hesap:** iki sayı arasında işlem ("12 çarpı 7", "5+3"; "-" ve ":" yalnız boşluklu sayılır, "2-3 gün" ve "saat 7:30" sayılmaz), sözle "artı / çarpı / bölü", "kaç eder", "hesapla".
+  - **ödev:** "ödev", "denklem", "kesir", "problemi çöz".
+  - **açıklama:** "nasıl çalışır", "açıkla", "arasındaki fark", "adım adım".
+  - **uzun:** 25 kelimeden uzun soru.
+  - "Kediler neden mırlar?" gibi sorular bilerek hızlı yolda kalır: çocukların sorularının çoğu "neden" diye başlıyor.
+- **`[DÜŞÜN]`:** hızlı modelin sistem istemine "Soru dikkatli düşünmeyi gerektiriyorsa (bir hesap, ödev, birkaç adımlı bir açıklama ya da emin olmadığın bir bilgi) cevap verme, yalnız [DÜŞÜN] yaz." eklenir. Bu cevap gelirse soru düşünen modele aktarılır. İşaret sohbet geçmişine yazılmaz, düşünen model hata verse bile.
+- **"Hmm, bir düşüneyim.":** düşünen modele geçmeden hemen önce söylenir (`think_filler`); bekleme sessiz geçmez. Onay, anahtar ya da açık devre kesici yüzünden düşünen modele sorulamayacaksa söylenmez; Luna doğrudan çevrimdışı cevabı verir.
+- İki istemci **tek sohbet geçmişi** paylaşır: düşünen modelin cevabından sonraki hızlı soru o cevabı görür. Dokunmayla düşürülen cevap iki geçmişten de silinir.
+- Log yalnız yolu ve nedeni yazar (`fast ok`, `think (hesap) ok`, `think (model) ok`), soru ve cevap metnini yazmaz.
+- `router_enabled: false` eski tek modelli davranışa döner. `think_model` ile düşünen yol başka bir modele (ör. `k3`) çevrilebilir; Kimi Code sayfasına göre o kotayı daha çok harcar.
+
+**Doğrulananlar**
+- Birim testleri (`test/test_router.py`, 11 test): kurallar, işaret biçimleri, istek alanları (düşünme kapalı / `reasoning_effort`, token sınırları, sistem istemi), dolgu cümlesinin ne zaman söylendiği, paylaşılan geçmiş, düşürülen cevap. Bilerek bozulan 9 davranışın 9'unu testler kırdı (ilk turda biri kaçtı: düşünen model hata verince işaretin geçmişte kalması; test eklendi).
+- Mac'te 308 test (22 atlandı), Docker `colcon test` 308/308.
+- Canlı yığın, Docker, `cloud:=true`, sahte Kimi sunucusu (`tools/voice_check/router_check.sh`):
+  - "Merhaba Luna" → hızlı yol.
+  - "12 çarpı 7 kaç eder?" → `think (hesap)`, hızlı modele istek yok.
+  - "Gökkuşağı neden oluşur?" → hızlı `[DÜŞÜN]` → `think (model)`.
+  - piper'a sırayla: cevap, "Hmm, bir düşüneyim.", cevap. Geçmiş 0 → 2 → 4 mesaj. 12/12 süreç temiz kapandı.
+
+**Doğrulanmayanlar**
+- Gerçek Kimi Code API'siyle denenmedi (Luna için anahtar yok). `reasoning_effort` ve `thinking` alanlarının bu uç noktada aynen kabul edildiği, gerçek modelin `[DÜŞÜN]` talimatına ne sıklıkla uyduğu ve düşünen yolun gerçek süresi ölçülmedi.
+- Kural listesi tahmin; gerçek konuşmalarda hangi soruların düşünen yola düştüğü loglardan izlenip ayarlanmalı.

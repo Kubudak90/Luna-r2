@@ -16,7 +16,7 @@ services:
     volumes:
       - /opt/luna/models:/models:ro # whisper ggml model + Piper Turkish voice (README "Ses zinciri"; not in the image)
     environment:
-      - MOONSHOT_API_KEY            # passed through from the host shell if set; never write the key here
+      - KIMI_API_KEY                # Kimi Code membership key, passed through from the host shell; never write it here
     command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true   # tags:=usb is the default here
   luna-mock:
     build: { context: .., dockerfile: docker/Dockerfile }
