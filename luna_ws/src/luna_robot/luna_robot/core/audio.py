@@ -1,5 +1,5 @@
-"""Microphone PCM helpers: pick one channel of the XVF3800 stream, measure its level and cut it into utterances
-for a speech-to-text plug-in, and gate listening by mute, head motion and a touch on the face (push-to-talk).
+"""Microphone PCM helpers: pick one channel of the mic array stream, measure its level and cut it into utterances
+for a speech-to-text plug-in, and gate listening by mute, body turning and a touch on the face (push-to-talk).
 Signed 16-bit little-endian PCM
 (ALSA S16_LE), standard library only."""
 import math
@@ -61,8 +61,8 @@ class Segmenter:
         self.voiced = self.silence = 0
 
     def feed(self, chunk, speech=None, hold=False, freeze=False):
-        """hold: no new utterance may start (head moving: servo noise); one already started runs to its end.
-        freeze: the chunk is neither speech nor silence (head moving: the speech flag is not trusted), so a running
+        """hold: no new utterance may start (body turning: motor noise); one already started runs to its end.
+        freeze: the chunk is neither speech nor silence (body turning: the speech flag is not trusted), so a running
         utterance keeps it but neither ends nor counts it as voiced."""
         cfg, n = self.cfg, len(chunk)
         voiced = rms_dbfs(chunk) > cfg.energy_dbfs if speech is None else speech
@@ -97,27 +97,22 @@ class Segmenter:
 
 @dataclass(frozen=True)
 class MicGateConfig:
-    moving_deg_s: float = 2.0       # head pan or tilt command faster than this = moving
-    settle_s: float = 0.3           # the servo lags its command and is still audible after it stops
+    turning_rad_s: float = 0.15     # body yaw rate (odometry) faster than this = turning
+    settle_s: float = 0.3           # gearbox noise and the bearing settling after the wheels stop
 
 
 class MicGate:
-    """When Luna may listen. Muted (software mute; the board's buttons are inside the head, R07): never.
-    Head moving (the tilt servo is ~49 mm from one mic, R07) and settle_s after: the speech flag and DoA are not
-    trusted and no new utterance starts. head() takes /luna/head/state (pan, tilt deg) samples."""
+    """When Luna may listen. Muted (software mute, or the privacy slider has cut the array's power): never.
+    Body turning in place (gearmotor noise, and the bearing moving under the array) and settle_s after: the speech
+    flag and DoA are not trusted and no new utterance starts. body() takes odometry yaw-rate samples (rad/s)."""
 
     def __init__(self, cfg=MicGateConfig(), muted=False):
         self.cfg, self.muted = cfg, muted
-        self.last = None
         self.moving_until = -1.0
 
-    def head(self, now, pan_deg, tilt_deg):
-        if self.last is not None:
-            t, pan, tilt = self.last
-            dt = now - t
-            if dt > 0 and max(abs(pan_deg - pan), abs(tilt_deg - tilt)) / dt > self.cfg.moving_deg_s:
-                self.moving_until = now + self.cfg.settle_s
-        self.last = (now, pan_deg, tilt_deg)
+    def body(self, now, yaw_rate):
+        if abs(yaw_rate) > self.cfg.turning_rad_s:
+            self.moving_until = now + self.cfg.settle_s
 
     def moving(self, now):
         return now < self.moving_until
@@ -186,7 +181,7 @@ class ListenWindow:
 
 
 class Listener:
-    """Capture chunks → question utterances: the Segmenter, gated by the MicGate (mute, head motion), Luna's own
+    """Capture chunks → question utterances: the Segmenter, gated by the MicGate (mute, body turning), Luna's own
     voice and the ListenWindow. Not thread-safe: the caller serialises feed() with window.talk()."""
 
     def __init__(self, segmenter, gate, window):

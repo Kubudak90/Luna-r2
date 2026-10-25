@@ -1,14 +1,14 @@
-"""World behind sim2d_node: a room with walls, furniture and the wall-backed dock with its tag and contacts, a lagged
-skid-steer base whose tracks slip more than wheel odometry assumes, bumpers and the pack. Pure Python, so mapping,
-navigation, docking and obstacle scenarios can be checked without ROS.
+"""World behind sim2d_node: a room with walls, furniture and the R2 dock (wheel funnel and stops, spring pins, tag
+mast), a lagged differential-drive base whose wheels slip a little more than odometry assumes, the bumper ring and the
+pack. Pure Python, so mapping, navigation, docking and obstacle scenarios can be checked without ROS.
 
 2.5D: walls are full-height line segments; every other obstacle is an axis-aligned Block or a vertical Cylinder
 with its own height band z0..z1. A sensor sees what its rays meet in 3D: the LiDAR's horizontal plane (z of the
 urdf laser frame) only meets obstacles that span it; the corner ToF cones (and the depth camera,
 core/depth_camera.py) also see low obstacles, table tops and the floor. Contact uses the robot's height bands
-(robot_bands, from the R07 CAD): only the front/rear TPU bumper strips (P24, Z125–149) report a touch on
-/luna/mcu/bumpers; any other contact (a toy against the tracks, a table top against the head) goes unnoticed by the
-robot and is logged as a crash.
+(robot_bands, docs/TASARIM_R2.md): R2 is round, so most bands are discs about the turning centre. Only the bumper
+ring (Z15–110, all the way round) reports a touch on /luna/mcu/bumpers; any other contact (a cable under the ring,
+a table top against the head) goes unnoticed by the robot and is logged as a crash.
 
 Frame 'world' is the start frame of the default room. With the robot starting at (0, 0, 0), slam_toolbox puts
 the map origin there too, so map ≈ world (up to SLAM error)."""
@@ -19,26 +19,22 @@ from typing import NamedTuple
 
 from . import kinematics as K
 from .dock_nav import Pose2D, dock_frame, wrap
+from .dock_tag import TagGeometry, tag_in_base
 from .frames import Pose
-from .mock_plant import TAG_HALF_FOV
+from .mock_plant import in_colour_view
 from .robot_model import load_frames
 from .tof import FRAMES as TOF_FRAMES
 
-HALF_LENGTH = 0.170     # R06: 340 mm along x (track axles C = 192 mm + sprockets)
-HALF_WIDTH = 0.189      # R06: track band |X| 141..189 mm → 378 mm across
+ROBOT_RADIUS = 0.180    # bumper ring outer surface = the robot's outline (urdf base_link)
+BUMPER_TRAVEL = 0.010   # the ring gives this much before the hard stop behind it
+BUMPER_Z = (0.015, 0.110)
+BUMPER_REACH = 0.010    # the ring's switches close this far out, before anything is hard against the robot
 LASER_X, _, LASER_Z = load_frames().origin('laser')   # urdf laser_joint: the scan plane sees only what spans it
-LASER_YAW = load_frames().yaw('laser')                # R08: −90°, the C1's +x points to the robot's right
-C1_ABOVE_PLANE = 0.0115   # RPLIDAR C1: 41.3 mm tall, laser plane 29.8 mm above its base (top Z601.3 in R08)
-BUMPER_DEPTH = 0.03     # front/rear bumper strips against a wall: this deep from the face inwards...
-BUMPER_REACH = 0.01     # ...and pressed this far before the hard contact
+LASER_YAW = load_frames().yaw('laser')                # −90°, the C1's +x points to the robot's right
+C1_HEIGHT = 0.0413      # RPLIDAR C1: 41.3 mm tall, laser plane 29.8 mm above its base
+C1_BASE_Z = 0.520       # top of the head
 WALL_HEIGHT = 2.5
-BUMPER_Z = (0.125, 0.149)            # P24 TPU strips
-BUMPER_ZONES = (                     # (bit, x0, x1, y0, y1) in base_link; bit 0 FL = robot's left (CAD P24_F_R)
-    (0, 0.159, HALF_LENGTH + BUMPER_REACH, 0.003, 0.125),
-    (1, 0.159, HALF_LENGTH + BUMPER_REACH, -0.125, -0.003),
-    (2, -HALF_LENGTH - BUMPER_REACH, -0.159, 0.003, 0.125),
-    (3, -HALF_LENGTH - BUMPER_REACH, -0.159, -0.125, -0.003),
-)
+DOCK_MAST = (0.45, 0.48, 0.06, 0.36)   # tag mast in the dock frame: x from, x to, half width, height
 
 
 def beam_toward(angle, beams=500, laser_yaw=None):
@@ -60,7 +56,7 @@ class Block(NamedTuple):
     y1: float
     z0: float
     z1: float
-    contact: bool = True     # False: only the sensors see it (the dock body; the dock capture models its contact)
+    contact: bool = True     # False: only the sensors see it (the dock plate; the dock capture models its contact)
 
 
 class Cylinder(NamedTuple):
@@ -85,6 +81,16 @@ class Band(NamedTuple):
     z1: float
 
 
+class Disc(NamedTuple):
+    """A part of the robot as a vertical cylinder in base_link."""
+    name: str
+    x: float
+    y: float
+    r: float
+    z0: float
+    z1: float
+
+
 class Contact(NamedTuple):
     t: float                 # sim time s
     name: str                # obstacle ('wall' for walls)
@@ -94,45 +100,46 @@ class Contact(NamedTuple):
 
 class Room(NamedTuple):
     walls: tuple            # (x0, y0, x1, y1) full-height segments
-    dock: Pose2D            # robot pose when docked, facing the wall
+    dock: Pose2D            # robot pose when docked, facing the tag mast
     obstacles: tuple = ()   # Block / Cylinder
 
 
 def robot_bands(frames=None):
-    """Luna's envelope by height (R07 CAD, x = −Y_cad, y = X_cad). The camera and the LiDAR follow their urdf frames."""
+    """Luna R2's envelope by height (docs/TASARIM_R2.md). The LiDAR follows its urdf frame."""
     frames = frames or load_frames()
-    cx, _, cz = frames.origin('oakd_link')
-    lz = frames.origin('laser')[2]
+    lx, ly, _ = frames.origin('laser')
     return (
-        Band('tracks', -HALF_LENGTH, HALF_LENGTH, -HALF_WIDTH, HALF_WIDTH, 0.0, 0.125),   # tracks + chassis P01/P02
-        Band('bumper', 0.159, HALF_LENGTH, -0.125, 0.125, *BUMPER_Z),                    # P24_F_*
-        Band('bumper', -HALF_LENGTH, -0.159, -0.125, 0.125, *BUMPER_Z),                  # P24_B_*
-        Band('body', -0.126, 0.132, -0.130, 0.130, 0.125, 0.345),       # shells P04–P07, display P09, grille P26
-        Band('neck', -0.070, 0.010, -0.060, 0.060, 0.345, 0.430),       # pan base P14_A, tilt fork P14_B
-        Band('head', -0.075, 0.052, -0.122, 0.122, 0.430, 0.520),       # P11/P12 at pan 0 (it pans ±60°)
-        Band('mast', -0.146, -0.087, -0.111, -0.045, 0.345, 0.550),     # LiDAR post / cable bundle
-        Band('lidar', -0.125, -0.015, -0.060, 0.060, 0.550, lz + C1_ABOVE_PLANE),  # bed P16 + RPLIDAR C1
-        Band('camera', cx - 0.009, cx + 0.009, -0.0455, 0.0455, cz - 0.014, cz + 0.014),  # OAK-D Lite
+        Disc('chassis', 0.0, 0.0, 0.165, 0.0, BUMPER_Z[0]),                        # wheels, casters, belly plate
+        Disc('bumper', 0.0, 0.0, ROBOT_RADIUS - BUMPER_TRAVEL, *BUMPER_Z),         # the ring, fully pressed
+        Disc('body', 0.0, 0.0, 0.170, BUMPER_Z[1], 0.345),                         # torso shell, depth camera window
+        Disc('neck', 0.0, 0.0, 0.040, 0.345, 0.360),
+        Band('head', -0.050, 0.070, -0.110, 0.110, 0.360, C1_BASE_Z),              # fixed head with the screen
+        Disc('lidar', lx, ly, 0.028, C1_BASE_Z, C1_BASE_Z + C1_HEIGHT),            # RPLIDAR C1 on the head
     )
 
 
-def dock_body(dock, depth=0.08, width=0.30, height=0.45):
-    """The dock in front of the docked robot's face, for the sensors (axis along x or y only)."""
+def dock_parts(dock):
+    """The R2 dock for the sensors: the low base plate (rolled over, sensors only) and the tag mast against the wall
+    behind it (a real obstacle: a robot that overruns the seat by 0.27 m bumps into it). Axis along x or y only."""
     c, s = round(math.cos(dock.yaw)), round(math.sin(dock.yaw))
     if abs(c) + abs(s) != 1:
         raise ValueError('dock axis must be along x or y')
-    near, far = HALF_LENGTH, HALF_LENGTH + depth
-    xs = (dock.x + c * near, dock.x + c * far) if c else (dock.x - width / 2, dock.x + width / 2)
-    ys = (dock.y + s * near, dock.y + s * far) if s else (dock.y - width / 2, dock.y + width / 2)
-    return Block('dock', min(xs), min(ys), max(xs), max(ys), 0.0, height, contact=False)
+
+    def block(name, a0, a1, half, z1, contact):
+        xs = (dock.x + c * a0, dock.x + c * a1) if c else (dock.x - half, dock.x + half)
+        ys = (dock.y + s * a0, dock.y + s * a1) if s else (dock.y - half, dock.y + half)
+        return Block(name, min(xs), min(ys), max(xs), max(ys), 0.0, z1, contact=contact)
+
+    m0, m1, mh, mz = DOCK_MAST
+    return (block('dock_plate', -0.30, m0, 0.22, 0.006, False), block('dock_mast', m0, m1, mh, mz, True))
 
 
 def default_room():
     """5 × 4 m room in the start frame: robot at the origin facing +x, a tall cabinet in the way, a pillar, and the
-    dock in the middle of the north wall. The dock body (0.45 m, tag centre ≈ 0.38 m) is below the scan plane."""
+    dock in the middle of the north wall, its mast against the wall (below the scan plane: Z0.36 < Z0.55)."""
     walls = box(-1.0, -2.0, 4.0, 2.0) + box(1.0, -0.8, 1.8, 0.9) + box(3.0, -1.4, 3.3, -1.1)
-    dock = Pose2D(3.0, 1.75, math.pi / 2)
-    return Room(walls, dock, (dock_body(dock),))
+    dock = Pose2D(3.0, 2.0 - DOCK_MAST[1], math.pi / 2)
+    return Room(walls, dock, dock_parts(dock))
 
 
 def slice_at(room, z):
@@ -274,52 +281,80 @@ def rect_overlaps(pose, x0, x1, y0, y1, ob):
                 max(p[1] for p in local) <= y0 or min(p[1] for p in local) >= y1)
 
 
-def clearance(pose, ob, x0=-HALF_LENGTH, x1=HALF_LENGTH, y0=-HALF_WIDTH, y1=HALF_WIDTH):
-    """Plan-view gap (m) between the robot's footprint at `pose` and obstacle `ob`, 0 when they overlap."""
-    if rect_overlaps(pose, x0, x1, y0, y1, ob):
-        return 0.0
+def _to_world(pose, x, y):
     c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+    return pose.x + x * c - y * s, pose.y + x * s + y * c
+
+
+def _gap_to(px, py, ob):
+    """Plan-view distance from a point (world) to obstacle `ob`, 0 inside it."""
+    if isinstance(ob, Cylinder):
+        return max(0.0, math.hypot(px - ob.x, py - ob.y) - ob.r)
+    return math.hypot(max(ob.x0 - px, 0.0, px - ob.x1), max(ob.y0 - py, 0.0, py - ob.y1))
+
+
+def _seg_dist(px, py, x0, y0, x1, y1):
+    ex, ey = x1 - x0, y1 - y0
+    n = ex * ex + ey * ey
+    t = 0.0 if n < 1e-18 else max(0.0, min(1.0, ((px - x0) * ex + (py - y0) * ey) / n))
+    return math.hypot(px - (x0 + t * ex), py - (y0 + t * ey))
+
+
+def disc_overlaps(pose, disc, ob):
+    """Does the robot-frame disc at `pose` overlap obstacle `ob` in plan view? Touching does not count."""
+    return _gap_to(*_to_world(pose, disc.x, disc.y), ob) < disc.r - 1e-12
+
+
+def clearance(pose, ob, radius=ROBOT_RADIUS):
+    """Plan-view gap (m) between the robot's round outline at `pose` and obstacle `ob`, 0 when they overlap."""
+    return max(0.0, _gap_to(pose.x, pose.y, ob) - radius)
+
+
+def _nearest_point(pose, ob):
+    """Nearest point of obstacle `ob` to the robot centre, in the robot frame."""
     if isinstance(ob, Cylinder):
         dx, dy = ob.x - pose.x, ob.y - pose.y
-        lx, ly = dx * c + dy * s, -dx * s + dy * c
-        return max(0.0, math.hypot(max(x0 - lx, 0.0, lx - x1), max(y0 - ly, 0.0, ly - y1)) - ob.r)
-    gaps = [math.hypot(max(ob.x0 - wx, 0.0, wx - ob.x1), max(ob.y0 - wy, 0.0, wy - ob.y1))
-            for wx, wy in ((pose.x + x * c - y * s, pose.y + x * s + y * c) for x in (x0, x1) for y in (y0, y1))]
-    for wx, wy in ((x, y) for x in (ob.x0, ob.x1) for y in (ob.y0, ob.y1)):
-        lx, ly = (wx - pose.x) * c + (wy - pose.y) * s, -(wx - pose.x) * s + (wy - pose.y) * c
-        gaps.append(math.hypot(max(x0 - lx, 0.0, lx - x1), max(y0 - ly, 0.0, ly - y1)))
-    return min(gaps)
+        d = math.hypot(dx, dy) or 1e-9
+        wx, wy = ob.x - dx / d * ob.r, ob.y - dy / d * ob.r
+    else:
+        wx, wy = min(max(pose.x, ob.x0), ob.x1), min(max(pose.y, ob.y0), ob.y1)
+    c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+    dx, dy = wx - pose.x, wy - pose.y
+    return dx * c + dy * s, -dx * s + dy * c
 
 
-def _reach(ob):
-    """Centre and plan-view radius of an obstacle, for a cheap distance pre-check."""
-    if isinstance(ob, Cylinder):
-        return ob.x, ob.y, ob.r
-    return (ob.x0 + ob.x1) / 2, (ob.y0 + ob.y1) / 2, math.hypot(ob.x1 - ob.x0, ob.y1 - ob.y0) / 2
-
-
-ROBOT_RADIUS = math.hypot(HALF_LENGTH + BUMPER_REACH, HALF_WIDTH)
+def bumper_bits(angle):
+    """Switches closed by a touch at `angle` (rad, robot frame) on the bumper ring: the front half pivots on two
+    switches at ±45° (bit 0 FL, bit 1 FR), the rear half likewise (bit 2 BL, bit 3 BR). Within ±20° of straight
+    ahead or back the half pushes in square and closes both."""
+    a = wrap(angle)
+    front = abs(a) < math.pi / 2
+    off = a if front else wrap(a - math.pi)
+    left, right = (0b0001, 0b0010) if front else (0b0100, 0b1000)   # behind, "left" is still the robot's left
+    if abs(off) <= math.radians(20):
+        return left | right
+    return left if (off > 0) == front else right
 
 
 @dataclass(frozen=True)
 class SimConfig:
     # Same physics as core/mock_plant.PlantConfig
     start_soc: float = 0.6
-    drain_w: float = 44.0
+    drain_w: float = 35.0
     charge_w: float = 50.0
-    pack_wh: float = 170.0
+    pack_wh: float = 154.0
     motor_tau_s: float = 0.15
-    dock_y_tol_m: float = 0.02        # lateral misalignment the receiver mouth still accepts
+    dock_y_tol_m: float = 0.045       # lateral misalignment the wheel funnel still takes in
     contact_travel_m: float = 0.003
     # 2D world
-    dock_yaw_tol: float = 0.2         # rad the receiver funnel accepts (not measured on the real dock)
-    dock_capture_m: float = 0.25      # dock body half width + margin: hard stop inside this lateral band
-    true_turn_slip: float = 1.42      # tracks really skid more than base_node's turn_slip (1.35) assumes
-    linear_slip: float = 0.02         # and lose this fraction of travel: wheel odometry over-reports
+    dock_yaw_tol: float = 0.25        # rad the wheel funnel takes in (not measured on the real dock)
+    dock_capture_m: float = 0.22      # dock plate half width: the wheel stops end the drive inside this band
+    true_turn_slip: float = 1.03      # the wheels slip a little in turns, more than base_node's turn_slip (1.0) assumes
+    linear_slip: float = 0.01         # and lose this fraction of travel: wheel odometry over-reports
     beams: int = 500                  # RPLIDAR C1: 5 kHz samples at 10 Hz
     range_max: float = 12.0
     range_noise_m: float = 0.01
-    tag_range_m: float = 3.0          # AprilTag still decoded by the head camera
+    tag_range_m: float = 4.0          # AprilTag still decoded by the colour camera (80 mm tag)
     tag_max_incidence: float = math.radians(60)
     # Corner ToF (VL53L1X): rays fanned over the ROI, nearest return wins, floor included
     corner_range_m: float = 4.0       # what /luna/mcu/corners reports with nothing in the cone (long mode)
@@ -375,16 +410,30 @@ class Sim2D:
 
     @property
     def twist(self):
-        """True body velocity (m/s, rad/s) of the tracks, slip included."""
-        vl, vr = (v * K.SPROCKET_RADIUS * (1.0 - self.cfg.linear_slip) for v in self.vel)
-        return (vl + vr) / 2, (vr - vl) / (K.TRACK_GAUGE * self.cfg.true_turn_slip)
+        """True body velocity (m/s, rad/s) of the base, slip included."""
+        vl, vr = (v * K.WHEEL_RADIUS * (1.0 - self.cfg.linear_slip) for v in self.vel)
+        return (vl + vr) / 2, (vr - vl) / (K.WHEEL_SEPARATION * self.cfg.true_turn_slip)
+
+    def _wall_hits(self, pose, radius, x=0.0, y=0.0):
+        """Nearest wall points (robot frame) closer than `radius` to the robot-frame point (x, y)."""
+        px, py = _to_world(pose, x, y)
+        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+        out = []
+        for x0, y0, x1, y1 in self.room.walls:
+            if _seg_dist(px, py, x0, y0, x1, y1) < radius:
+                ex, ey = x1 - x0, y1 - y0
+                n = ex * ex + ey * ey
+                t = max(0.0, min(1.0, ((pose.x - x0) * ex + (pose.y - y0) * ey) / n)) if n > 1e-18 else 0.0
+                dx, dy = x0 + t * ex - pose.x, y0 + t * ey - pose.y
+                out.append((dx * c + dy * s, -dx * s + dy * c))
+        return out
 
     def _local(self, pose, x, y):
         c, s = math.cos(pose.yaw), math.sin(pose.yaw)
         dx, dy = x - pose.x, y - pose.y
         return dx * c + dy * s, -dx * s + dy * c
 
-    def _touches(self, pose, xmin, xmax, ymin, ymax):
+    def _box_touches_wall(self, pose, xmin, xmax, ymin, ymax):
         for x0, y0, x1, y1 in self.room.walls:
             if _touches_box(self._local(pose, x0, y0), self._local(pose, x1, y1), xmin, xmax, ymin, ymax):
                 return True
@@ -392,18 +441,25 @@ class Sim2D:
 
     def _near(self, pose):
         for ob in self.solid:
-            cx, cy, r = _reach(ob)
-            if math.hypot(cx - pose.x, cy - pose.y) < r + ROBOT_RADIUS + 0.02:
+            if _gap_to(pose.x, pose.y, ob) < ROBOT_RADIUS + BUMPER_REACH + 0.02:
                 yield ob
 
+    def _overlaps(self, pose, band, ob):
+        if isinstance(band, Disc):
+            return disc_overlaps(pose, band, ob)
+        return rect_overlaps(pose, band.x0, band.x1, band.y0, band.y1, ob)
+
     def hard_contacts(self, pose):
-        """{obstacle name: robot bands overlapping it} at `pose`; 'wall' when the footprint reaches a wall."""
+        """{obstacle name: robot bands overlapping it} at `pose`; 'wall' when a band reaches a wall."""
         out = {}
-        if self._touches(pose, -HALF_LENGTH, HALF_LENGTH, -HALF_WIDTH, HALF_WIDTH):
-            out['wall'] = {'tracks'}
+        for b in self.bands:
+            hit = (self._wall_hits(pose, b.r, b.x, b.y) if isinstance(b, Disc)
+                   else self._box_touches_wall(pose, b.x0, b.x1, b.y0, b.y1))
+            if hit:
+                out.setdefault('wall', set()).add(b.name)
         for ob in self._near(pose):
             for b in self.bands:
-                if b.z0 < ob.z1 and ob.z0 < b.z1 and rect_overlaps(pose, b.x0, b.x1, b.y0, b.y1, ob):
+                if b.z0 < ob.z1 and ob.z0 < b.z1 and self._overlaps(pose, b, ob):
                     out.setdefault(ob.name, set()).add(b.name)
         return out
 
@@ -411,19 +467,19 @@ class Sim2D:
         return bool(self.hard_contacts(pose))
 
     def _wall_bumpers(self):
-        L, W, d, e = HALF_LENGTH, HALF_WIDTH, BUMPER_DEPTH, BUMPER_REACH
-        zones = ((L - d, L + e, 0.0, W), (L - d, L + e, -W, 0.0), (-L - e, -L + d, 0.0, W), (-L - e, -L + d, -W, 0.0))
-        return sum(1 << i for i, z in enumerate(zones) if self._touches(self.pose, *z))
+        bits = 0
+        for lx, ly in self._wall_hits(self.pose, ROBOT_RADIUS + BUMPER_REACH):
+            bits |= bumper_bits(math.atan2(ly, lx))
+        return bits
 
     def _obstacle_bumpers(self):
-        """(bits, names) of the obstacles pressing a P24 strip."""
+        """(bits, names) of the obstacles pressing the bumper ring."""
         bits, names = 0, set()
+        reach = Disc('ring', 0.0, 0.0, ROBOT_RADIUS + BUMPER_REACH, *BUMPER_Z)
         for ob in self._near(self.pose):
-            if ob.z0 < BUMPER_Z[1] and BUMPER_Z[0] < ob.z1:
-                for bit, x0, x1, y0, y1 in BUMPER_ZONES:
-                    if rect_overlaps(self.pose, x0, x1, y0, y1, ob):
-                        bits |= 1 << bit
-                        names.add(ob.name)
+            if ob.z0 < BUMPER_Z[1] and BUMPER_Z[0] < ob.z1 and disc_overlaps(self.pose, reach, ob):
+                bits |= bumper_bits(math.atan2(*reversed(_nearest_point(self.pose, ob))))
+                names.add(ob.name)
         return bits, names
 
     def _log_contacts(self, hard, pressed, wall_bits):
@@ -443,24 +499,23 @@ class Sim2D:
         for i in range(2):
             self.vel[i] += (self.target[i] - self.vel[i]) * min(1.0, dt / c.motor_tau_s)
             self.pos[i] += self.vel[i] * dt
-        dl, dr = ((self.pos[i] - prev[i]) * K.SPROCKET_RADIUS * (1.0 - c.linear_slip) for i in range(2))
-        ds, dyaw = (dl + dr) / 2, (dr - dl) / (K.TRACK_GAUGE * c.true_turn_slip)
+        dl, dr = ((self.pos[i] - prev[i]) * K.WHEEL_RADIUS * (1.0 - c.linear_slip) for i in range(2))
+        ds, dyaw = (dl + dr) / 2, (dr - dl) / (K.WHEEL_SEPARATION * c.true_turn_slip)
         p, mid = self.pose, self.pose.yaw + dyaw / 2
         cand = Pose2D(p.x + ds * math.cos(mid), p.y + ds * math.sin(mid), wrap(p.yaw + dyaw))
         along, lateral, _ = dock_frame(cand, self.room.dock)
         hard = self.hard_contacts(cand) if cand != p else {}
         if (along > 0.0 and abs(lateral) < c.dock_capture_m) or hard:
-            self.pos, self.vel = prev, [0.0, 0.0]          # tracks stall against the wall, furniture or the dock nose
+            self.pos, self.vel = prev, [0.0, 0.0]          # wheels stall at the dock's wheel stops, a wall or furniture
         else:
             self.pose = cand
         along, lateral, dyaw_err = dock_frame(self.pose, self.room.dock)
         at_dock = abs(lateral) < c.dock_capture_m
         aligned = abs(lateral) < c.dock_y_tol_m and abs(dyaw_err) < c.dock_yaw_tol
         self.docked = at_dock and aligned and along >= -c.contact_travel_m
-        nose_bump = at_dock and not aligned and along >= -BUMPER_REACH    # dock nose hits the face beside the mouth
         wall_bits = self._wall_bumpers()
         ob_bits, pressed = self._obstacle_bumpers()
-        self.bumpers = wall_bits | ob_bits | (0b0011 if nose_bump else 0)
+        self.bumpers = wall_bits | ob_bits
         self._log_contacts(hard, pressed, wall_bits)
         self.wh = min(c.pack_wh, self.wh + (c.charge_w if self.charging else -c.drain_w) * dt / 3600)
 
@@ -482,7 +537,7 @@ class Sim2D:
 
     def corners(self):
         """VL53L1X ranges [FL, FR, BL, BR] (m): nearest return in each cone, floor included; corner_range_m when
-        nothing is in range. Window positions and headings come from the urdf tof_* frames (straight ahead / back)."""
+        nothing is in range. Window positions and headings come from the urdf tof_* frames."""
         p, c = self.pose, self.cfg
         cy, sy = math.cos(p.yaw), math.sin(p.yaw)
         out = []
@@ -497,18 +552,22 @@ class Sim2D:
         return out
 
     def tag(self):
-        """(offset -1..1, distance m) like core/mock_plant.DockPlant.tag, or None when the head camera can't see it."""
+        """(offset -1..1, distance to the seat m) like core/mock_plant.DockPlant.tag, or None when the colour camera
+        can't see the tag on the mast."""
         c, d = self.cfg, self.room.dock
         along, lateral, dyaw = dock_frame(self.pose, d)
-        dist = -along
-        if dist < -0.01 or math.hypot(along, lateral) > c.tag_range_m:
+        g = TagGeometry()
+        dist, to_tag = -along, g.seat_m - along
+        if dist < -0.01 or math.hypot(to_tag, lateral) > c.tag_range_m:
             return None
-        if dist > 1e-3 and math.atan2(abs(lateral), dist) > c.tag_max_incidence:
+        if math.atan2(abs(lateral), to_tag) > c.tag_max_incidence:
             return None                                    # tag seen too obliquely to decode
-        bearing = math.atan2(-lateral, max(1e-3, dist)) - dyaw
-        if abs(bearing) >= TAG_HALF_FOV or _segment_blocked(self.pose.x, self.pose.y, d.x, d.y, self.room.walls):
+        x, y, _ = tag_in_base(along, lateral, dyaw, g)
+        tx, ty = d.x + g.seat_m * math.cos(d.yaw), d.y + g.seat_m * math.sin(d.yaw)
+        if not in_colour_view(x, y) or _segment_blocked(self.pose.x, self.pose.y, tx, ty, self.room.walls):
             return None
-        return -bearing / TAG_HALF_FOV, max(0.0, dist)
+        offset = max(-1.0, min(1.0, -math.atan2(y, x) / math.radians(g.half_angle_deg)))
+        return offset, max(0.0, dist)
 
 
 def _segment_blocked(ax, ay, bx, by, walls):

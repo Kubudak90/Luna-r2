@@ -1,9 +1,9 @@
 """Dock tag → /luna/dock/tag for dock_node.
 
-apriltag_ros runs once per head camera (namespaces /camera_left, /camera_right) and publishes the tag as TF frame
-`dock_tag_<cam>` under that camera's optical frame. On every detection this node looks the tag up in base_link at
-the image stamp; TF carries it through head tilt and pan (head_node → /joint_states → robot_state_publisher), so
-the head may point anywhere. The cameras are fused and turned into (offset, distance) by core/dock_tag.py."""
+apriltag_ros runs on the Gemini 336 colour camera (namespace /camera/color) and publishes the tag as TF frame
+`dock_tag_color` under camera_color_optical_frame. On every detection this node looks the tag up in base_link at the
+image stamp, and core/dock_tag.py turns it into (offset, distance). `cameras` may list more cameras
+(/camera/<cam>/detections, dock_tag_<cam>); their tags are fused."""
 import time
 from functools import partial
 
@@ -21,7 +21,7 @@ from .core.dock_tag import TagFuser, TagGeometry, observe
 class DockTagNode(Node):
     def __init__(self):
         super().__init__('luna_dock_tag')
-        self.declare_parameter('cameras', ['left', 'right'])
+        self.declare_parameter('cameras', ['color'])
         self.declare_parameter('tag_id', 0)
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('max_age_s', 0.3)
@@ -38,7 +38,7 @@ class DockTagNode(Node):
         self.tf_listener = TransformListener(self.tf, self)
         self.pending = []                       # (camera, stamp, received monotonic s)
         for cam in p('cameras').value:
-            self.create_subscription(AprilTagDetectionArray, f'/camera_{cam}/detections', partial(self._detections, cam), 10)
+            self.create_subscription(AprilTagDetectionArray, f'/camera/{cam}/detections', partial(self._detections, cam), 10)
         self.pub_tag = self.create_publisher(PointStamped, T.DOCK_TAG, 10)
         self.pub_pos = self.create_publisher(PointStamped, T.DOCK_TAG_POSITION, 10)
         self.retry = self.create_timer(0.01, self._resolve)     # runs only while detections wait for TF

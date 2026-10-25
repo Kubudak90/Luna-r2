@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Watches a running stack (e.g. `ros2 launch luna_robot luna.launch.py tags:=sim`) and reports the dock run:
 state changes with times, /luna/dock/tag rate and range, and the mock's true final pose.
-    python3 tools/dock_watch.py --seconds 45 [--pan 30]      (--pan: head target sent for the whole run)"""
+    python3 tools/dock_watch.py --seconds 45"""
 import argparse
 import math
 import time
 
 import rclpy
-from geometry_msgs.msg import PointStamped, PoseStamped, Vector3
+from geometry_msgs.msg import PointStamped, PoseStamped
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -15,16 +15,13 @@ from luna_robot import topics as T
 
 
 class Watch(Node):
-    def __init__(self, pan):
+    def __init__(self):
         super().__init__('luna_dock_watch')
         self.t0 = time.monotonic()
-        self.states, self.tags, self.truth, self.pan = [], [], None, pan
+        self.states, self.tags, self.truth = [], [], None
         self.create_subscription(String, T.DOCK_STATE, self._state, 10)
         self.create_subscription(PointStamped, T.DOCK_TAG, lambda m: self.tags.append((self._t(), m.point.x, m.point.z)), 50)
         self.create_subscription(PoseStamped, T.MOCK_TRUTH, lambda m: setattr(self, 'truth', m.pose), 10)
-        self.pub_head = self.create_publisher(Vector3, T.HEAD_TARGET, 10)
-        if pan is not None:
-            self.create_timer(0.2, lambda: self.pub_head.publish(Vector3(x=float(pan), y=0.0, z=0.0)))
 
     def _t(self):
         return time.monotonic() - self.t0
@@ -37,10 +34,9 @@ class Watch(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--seconds', type=float, default=45.0)
-    ap.add_argument('--pan', type=float, default=None)
     a = ap.parse_args()
     rclpy.init()
-    w = Watch(a.pan)
+    w = Watch()
     end = time.monotonic() + a.seconds
     while time.monotonic() < end:
         rclpy.spin_once(w, timeout_sec=0.1)

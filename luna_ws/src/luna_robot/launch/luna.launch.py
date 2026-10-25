@@ -1,28 +1,32 @@
-"""Luna bringup.  ros2 launch luna_robot luna.launch.py            (mock MCU, no hardware)
-               ros2 launch luna_robot luna.launch.py sim:=true    (2D room simulator with LiDAR, for SLAM/Nav2)
-               ros2 launch luna_robot luna.launch.py mock:=false  (Teensy over micro-ROS + RPLIDAR C1)
+"""Luna R2 bringup.  ros2 launch luna_robot luna.launch.py            (mock MCU, no hardware)
+                  ros2 launch luna_robot luna.launch.py sim:=true    (2D room simulator with LiDAR, for SLAM/Nav2)
+                  ros2 launch luna_robot luna.launch.py mock:=false  (Teensy over micro-ROS, RPLIDAR C1, Gemini 336)
 Mapping and navigation on top of this: luna_nav.launch.py.
 
-tags:= where /luna/dock/tag comes from (default: mock with mock:=true, usb with mock:=false)
-  mock  the mock MCU fakes it; no camera packages needed
-  sim   sim_camera_node renders the head cameras from the mock's true pose → apriltag_ros → dock_tag_node
-  usb   the two Arducam head cameras (usb_cam) → apriltag_ros → dock_tag_node
+tags:= where /luna/dock/tag comes from (default: mock with mock:=true, gemini with mock:=false)
+  mock    the mock MCU fakes it; no camera packages needed
+  sim     sim_camera_node renders the Gemini colour camera from the mock's true pose → apriltag_ros → dock_tag_node
+  gemini  the Gemini 336 colour camera (its driver comes with depth:=gemini) → apriltag_ros → dock_tag_node
 With sim:=true the 2D simulator replaces the mock MCU and publishes /luna/dock/tag itself, so tags:= must stay
 empty or mock.
 Obstacles below the LiDAR plane: tof_range_node always turns the corner ToF into /luna/tof/* (Range) and point arcs.
-depth:= where /oak/points comes from (default: sim with sim:=true, else off)
-  sim   sim_depth_node renders the 2.5D simulator's room (needs sim:=true)
-  oakd  Luxonis OAK-D Lite via depthai_ros_driver (optional like sllidar_ros2: skipped with a warning if absent;
-        config/oakd.yaml, not tried on hardware)
-  off   no depth camera
-sim_world:= the simulator's room (core/sim_worlds.py: room, toy, table, chair, dock, door).
-Voice: voice:=false leaves out audio/attention/stt/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival;
-use doa:=mock or voice:=false with mock:=true / sim:=true); cloud:=true is the owner's consent for the cloud
+depth:= where /camera/depth/points (and the gyro, and the colour camera) come from (default: sim with sim:=true,
+gemini with mock:=false, else off)
+  sim     sim_depth_node renders the 2.5D simulator's room (needs sim:=true); sim2d_node publishes the gyro
+  gemini  Orbbec Gemini 336 via OrbbecSDK_ROS2 (optional like sllidar_ros2: skipped with a warning if absent;
+          config/gemini.yaml, not tried on hardware)
+  off     no depth camera
+sim_world:= the simulator's room (core/sim_worlds.py: room, toy, table, chair, dock, door, door60/70/80).
+face:= face_track_node on the Raspberry Pi Camera v2 over the screen (default: true with mock:=false): eye contact.
+Voice: voice:=false leaves out audio/attention/stt/assistant/speech; doa:=usb|mock|off (ReSpeaker v2.0 direction of
+arrival; use doa:=mock or voice:=false with mock:=true / sim:=true); cloud:=true is the owner's consent for the cloud
 assistant (it also needs a key, see config/luna.yaml).
 voice_servers:=true (default) also starts whisper.cpp's whisper-server (speech-to-text, whisper_model:=) and Piper's
 HTTP server (Turkish voice, piper_voice:=) on the addresses luna_stt / luna_speech use in config/luna.yaml, each
 only if its program and model are installed (otherwise a log line, and Luna says she cannot understand / stays
-silent). Both run on the robot: no audio or text leaves it."""
+silent). Both run on the robot: no audio or text leaves it.
+The face itself is a web page served by face_bridge_node (http://127.0.0.1:8765/) and shown full screen on the
+head's AMOLED by a kiosk browser (tools/kiosk.sh, outside ROS)."""
 import importlib.util
 import os
 import shutil
@@ -42,21 +46,40 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from luna_robot.core.robot_model import drop_links
 from luna_robot.launch_util import IGNORE_LATE_SIGINT, STOP_AS_CLEAN_EXIT
-CAMERAS = ('left', 'right')
-OAK_OPTICAL_FRAMES = ('oak_rgb_camera_optical_frame', 'oak_left_camera_optical_frame', 'oak_right_camera_optical_frame')
+GEMINI_OPTICAL_FRAMES = ('camera_color_optical_frame', 'camera_depth_optical_frame')
+
+
+def _truthy(context, name):
+    return context.perform_substitution(LaunchConfiguration(name)).lower() in ('true', '1')
 
 
 def _tags(context):
-    mock = context.perform_substitution(LaunchConfiguration('mock')).lower() in ('true', '1')
-    sim = context.perform_substitution(LaunchConfiguration('sim')).lower() in ('true', '1')
-    tags = context.perform_substitution(LaunchConfiguration('tags')) or ('mock' if mock or sim else 'usb')
-    if tags not in ('mock', 'sim', 'usb'):
-        raise ValueError(f'tags:={tags}: expected mock, sim or usb')
+    mock, sim = _truthy(context, 'mock'), _truthy(context, 'sim')
+    tags = context.perform_substitution(LaunchConfiguration('tags')) or ('mock' if mock or sim else 'gemini')
+    if tags not in ('mock', 'sim', 'gemini'):
+        raise ValueError(f'tags:={tags}: expected mock, sim or gemini')
     if sim and tags != 'mock':
         raise ValueError(f'tags:={tags} with sim:=true: the 2D simulator publishes /luna/dock/tag itself')
     if tags in ('mock', 'sim') and not (mock or sim):
         raise ValueError(f'tags:={tags} needs mock:=true (it uses the mock robot pose)')
+    if tags == 'gemini' and _depth_source(context) != 'gemini':
+        raise ValueError('tags:=gemini needs depth:=gemini: the colour camera comes with the Gemini driver')
     return mock, sim, tags
+
+
+def _depth_source(context):
+    mock, sim = _truthy(context, 'mock'), _truthy(context, 'sim')
+    depth = context.perform_substitution(LaunchConfiguration('depth')) or ('sim' if sim else 'off' if mock else 'gemini')
+    if depth not in ('sim', 'gemini', 'off'):
+        raise ValueError(f'depth:={depth}: expected sim, gemini or off')
+    if depth == 'sim' and not sim:
+        raise ValueError('depth:=sim needs sim:=true (it renders the simulator\'s room)')
+    return depth
+
+
+def _checks(context):
+    _tags(context)          # bad mock/tags/depth: fail before any node starts
+    return []
 
 
 def _tag_pipeline(context, params, share):
@@ -77,33 +100,17 @@ def _tag_pipeline(context, params, share):
                                                  os.path.join(share, 'config', 'fastdds_large_images.xml')))
     if tags == 'sim':
         actions.append(Node(package='luna_robot', executable='sim_camera_node', name='luna_sim_camera', parameters=[params]))
-    for cam in CAMERAS:
-        ns = f'camera_{cam}'
-        if tags == 'usb':
-            actions.append(Node(package='usb_cam', executable='usb_cam_node_exe', name='usb_cam', namespace=ns,
-                                parameters=[os.path.join(share, 'config', 'cameras.yaml')],
-                                prefix=IGNORE_LATE_SIGINT, exec_name=f'usb_cam_{cam}'))
-        # apriltag_ros wants a rectified `image_rect`; until the cameras are calibrated the raw image is used.
-        actions.append(Node(package='apriltag_ros', executable='apriltag_node', name='apriltag', namespace=ns,
-                            parameters=[os.path.join(share, 'config', 'apriltag.yaml'), {'tag.frames': [f'dock_tag_{cam}']}],
-                            remappings=[('image_rect', 'image_raw')], prefix=IGNORE_LATE_SIGINT, exec_name=f'apriltag_{cam}'))
+    # apriltag_ros wants a rectified `image_rect`; the Gemini colour stream is close enough to pinhole at 720p.
+    actions.append(Node(package='apriltag_ros', executable='apriltag_node', name='apriltag', namespace='camera/color',
+                        parameters=[os.path.join(share, 'config', 'apriltag.yaml'), {'tag.frames': ['dock_tag_color']}],
+                        remappings=[('image_rect', 'image_raw')], prefix=IGNORE_LATE_SIGINT, exec_name='apriltag_color'))
     actions.append(Node(package='luna_robot', executable='dock_tag_node', name='luna_dock_tag', parameters=[params]))
     return actions
 
 
-def _depth_source(context):
-    sim = context.perform_substitution(LaunchConfiguration('sim')).lower() in ('true', '1')
-    depth = context.perform_substitution(LaunchConfiguration('depth')) or ('sim' if sim else 'off')
-    if depth not in ('sim', 'oakd', 'off'):
-        raise ValueError(f'depth:={depth}: expected sim, oakd or off')
-    if depth == 'sim' and not sim:
-        raise ValueError('depth:=sim needs sim:=true (it renders the simulator\'s room)')
-    return depth
-
-
 def _robot_state_publisher(context, urdf):
-    if _depth_source(context) == 'oakd':     # depthai_ros_driver publishes the OAK optical frames below oakd_link
-        urdf = drop_links(urdf, OAK_OPTICAL_FRAMES)
+    if _depth_source(context) == 'gemini':     # OrbbecSDK_ROS2 publishes the optical frames below camera_link
+        urdf = drop_links(urdf, GEMINI_OPTICAL_FRAMES)
     return [Node(package='robot_state_publisher', executable='robot_state_publisher',
                  parameters=[{'robot_description': urdf}], prefix=IGNORE_LATE_SIGINT, exec_name='robot_state_publisher')]
 
@@ -116,21 +123,21 @@ def _depth(context, params):
                      parameters=[params, {'world': world}])]
     if depth == 'off':
         return []
-    try:  # depthai_ros_driver is optional (not in the image); the camera pose stays in our URDF (oakd_link)
-        driver = get_package_share_directory('depthai_ros_driver')
+    try:  # OrbbecSDK_ROS2 is optional (built from source on the robot); the camera pose stays in our URDF
+        driver = get_package_share_directory('orbbec_camera')
     except Exception:
-        return [LogInfo(msg='depth:=oakd but depthai_ros_driver is not installed: no depth camera')]
-    share = get_package_share_directory('luna_robot')
+        return [LogInfo(msg='depth:=gemini but orbbec_camera (OrbbecSDK_ROS2) is not installed: no depth camera')]
+    with open(os.path.join(get_package_share_directory('luna_robot'), 'config', 'gemini.yaml')) as f:
+        args = {k: str(v) for k, v in yaml.safe_load(f).items()}
     return [IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(driver, 'launch', 'camera.launch.py')),
-        launch_arguments={'name': 'oak', 'camera_model': 'OAK-D-LITE', 'parent_frame': 'oakd_link',
-                          'cam_pos_x': '0.0', 'cam_pos_y': '0.0', 'cam_pos_z': '0.0', 'cam_roll': '0.0',
-                          'cam_pitch': '0.0', 'cam_yaw': '0.0', 'pointcloud.enable': 'true',
-                          'params_file': os.path.join(share, 'config', 'oakd.yaml')}.items())]
+        PythonLaunchDescriptionSource(os.path.join(driver, 'launch', 'gemini_330_series.launch.py')),
+        launch_arguments=args.items())]
 
 
-def _truthy(context, name):
-    return context.perform_substitution(LaunchConfiguration(name)).lower() in ('true', '1')
+def _face(context, params):
+    face = context.perform_substitution(LaunchConfiguration('face'))
+    on = face.lower() in ('true', '1') if face else not (_truthy(context, 'mock') or _truthy(context, 'sim'))
+    return [Node(package='luna_robot', executable='face_track_node', name='luna_face_track', parameters=[params])] if on else []
 
 
 def _host_port(url, default_port):
@@ -187,12 +194,15 @@ def generate_launch_description():
         DeclareLaunchArgument('auto_dock', default_value='true',
                               description='dock_node docks by itself on low battery (false when dock_nav_node decides)'),
         DeclareLaunchArgument('lidar', default_value='false'),
-        DeclareLaunchArgument('depth', default_value='', description='sim | oakd | off (default: sim if sim:=true, else off)'),
+        DeclareLaunchArgument('depth', default_value='',
+                              description='sim | gemini | off (default: sim if sim:=true, gemini if mock:=false, else off)'),
         DeclareLaunchArgument('sim_world', default_value='room', description='simulator room (core/sim_worlds.py)'),
         DeclareLaunchArgument('mcu_port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0'),
-        DeclareLaunchArgument('tags', default_value='', description='mock | sim | usb (default: mock if mock:=true, else usb)'),
-        OpaqueFunction(function=lambda context: _tags(context) and []),   # bad mock/tags: fail before any node starts
+        DeclareLaunchArgument('tags', default_value='',
+                              description='mock | sim | gemini (default: mock if mock:=true, else gemini)'),
+        DeclareLaunchArgument('face', default_value='', description='face camera tracking (default: true if mock:=false)'),
+        OpaqueFunction(function=_checks),
         DeclareLaunchArgument('voice', default_value='true'),
         DeclareLaunchArgument('doa', default_value='usb'),
         DeclareLaunchArgument('cloud', default_value='false'),
@@ -202,7 +212,6 @@ def generate_launch_description():
         DeclareLaunchArgument('piper_voice', default_value='/models/piper/tr_TR-dfki-medium.onnx'),
         OpaqueFunction(function=_robot_state_publisher, args=[urdf]),
         Node(package='luna_robot', executable='base_node', name='luna_base', parameters=[params]),
-        Node(package='luna_robot', executable='head_node', name='luna_head', parameters=[params]),
         Node(package='luna_robot', executable='dock_node', name='luna_dock',
              parameters=[params, {'auto_dock': ParameterValue(LaunchConfiguration('auto_dock'), value_type=bool)}]),
         Node(package='luna_robot', executable='face_bridge_node', name='luna_face_bridge', parameters=[params]),
@@ -213,6 +222,7 @@ def generate_launch_description():
              condition=IfCondition(sim)),
         Node(package='luna_robot', executable='tof_range_node', name='luna_tof_range', parameters=[params]),
         OpaqueFunction(function=_depth, args=[params]),
+        OpaqueFunction(function=_face, args=[params]),
         Node(package='micro_ros_agent', executable='micro_ros_agent', arguments=['serial', '--dev', LaunchConfiguration('mcu_port')],
              condition=IfCondition(PythonExpression(["'", mock, "' != 'true' and '", sim, "' != 'true'"]))),
         Node(package='luna_robot', executable='audio_node', name='luna_audio', condition=voice,

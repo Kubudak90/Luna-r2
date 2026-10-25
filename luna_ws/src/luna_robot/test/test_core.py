@@ -10,35 +10,41 @@ from luna_robot.core import kinematics as K
 from luna_robot.core.battery import decide, soc_from_voltage
 from luna_robot.core.dock import Dock, Obs
 from luna_robot.core.face_mood import FACE_EVENTS, MoodMapper
-from luna_robot.core.head import Head
 from luna_robot.core.mock_plant import DockPlant, PlantConfig
 from luna_robot.core.safety import gate
 
 
 class Kinematics(unittest.TestCase):
-    def test_sprocket_radius_matches_16t_24mm_pitch(self):
-        self.assertAlmostEqual(K.SPROCKET_RADIUS * 2, 0.1230, places=3)
+    def test_wheel_geometry(self):
+        self.assertAlmostEqual(K.WHEEL_RADIUS * 2, 0.080)          # Pololu 80 × 10 mm
+        self.assertAlmostEqual(K.WHEEL_SEPARATION, 0.300)
 
     def test_straight_and_turn_round_trip(self):
         for v, w in [(0.2, 0.0), (0.0, 0.8), (0.15, -0.5), (-0.1, 0.3)]:
-            l, r = K.twist_to_tracks(v, w)
-            v2, w2 = K.tracks_to_twist(l, r)
+            l, r = K.twist_to_wheels(v, w)
+            v2, w2 = K.wheels_to_twist(l, r)
             self.assertAlmostEqual(v, v2, places=9)
             self.assertAlmostEqual(w, w2, places=9)
 
+    def test_turn_in_place_spins_the_wheels_opposite(self):
+        l, r = K.twist_to_wheels(0.0, 1.0)
+        self.assertAlmostEqual(l, -r)
+        self.assertAlmostEqual(r * K.WHEEL_RADIUS, 1.0 * K.WHEEL_SEPARATION / 2)
+
     def test_saturation_keeps_turn_ratio(self):
         lim = K.DriveLimits(max_linear=10, max_angular=10, max_wheel_rad_s=5)
-        l, r = K.twist_to_tracks(2.0, 1.0, lim)
+        l, r = K.twist_to_wheels(2.0, 1.0, lim)
         self.assertLessEqual(max(abs(l), abs(r)), 5 + 1e-9)
-        l0, r0 = (2.0 - 1.0 * K.TRACK_GAUGE / 2 * lim.turn_slip), (2.0 + 1.0 * K.TRACK_GAUGE / 2 * lim.turn_slip)
+        l0, r0 = (2.0 - 1.0 * K.WHEEL_SEPARATION / 2 * lim.turn_slip), (2.0 + 1.0 * K.WHEEL_SEPARATION / 2 * lim.turn_slip)
         self.assertAlmostEqual(l / r, l0 / r0, places=9)
 
     def test_command_limits(self):
-        l, r = K.twist_to_tracks(5.0, 0.0)
-        self.assertAlmostEqual(l * K.SPROCKET_RADIUS, K.DriveLimits().max_linear, places=9)
+        l, r = K.twist_to_wheels(5.0, 0.0)
+        self.assertAlmostEqual(l * K.WHEEL_RADIUS, K.DriveLimits().max_linear, places=9)
+        self.assertLess(K.DriveLimits().max_linear / K.WHEEL_RADIUS, K.DriveLimits().max_wheel_rad_s)   # reachable
 
     def test_pwm_cap_protects_12v_motor(self):
-        self.assertAlmostEqual(K.pwm_cap(16.8), 12 / 16.8)
+        self.assertAlmostEqual(K.pwm_cap(14.6), 12 / 14.6)         # LiFePO4 4S on the charger
         self.assertEqual(K.pwm_cap(11.0), 1.0)
         self.assertEqual(K.pwm_cap(0), 0.0)
         self.assertEqual(K.pwm_cap(float('nan')), 0.0)
@@ -46,36 +52,35 @@ class Kinematics(unittest.TestCase):
     def test_odometry_straight_line(self):
         o = K.Odometry()
         o.update(0, 0)
-        turns = 1.0 / (2 * math.pi * K.SPROCKET_RADIUS)          # 1 m of track travel
+        turns = 1.0 / (2 * math.pi * K.WHEEL_RADIUS)            # 1 m of wheel travel
         x, y, yaw = o.update(turns * 2 * math.pi, turns * 2 * math.pi)
         self.assertAlmostEqual(x, 1.0, places=6)
         self.assertAlmostEqual(y, 0.0, places=6)
         self.assertAlmostEqual(yaw, 0.0, places=6)
 
+    def test_odometry_takes_the_gyro_heading_when_given(self):
+        o = K.Odometry()
+        o.update(0, 0)
+        quarter = math.pi / 2 * K.WHEEL_SEPARATION / 2 / K.WHEEL_RADIUS       # wheel angle for a 90° turn in place
+        _, _, yaw = o.update(-quarter, quarter, dyaw_gyro=math.radians(80))    # the wheels slipped: the gyro is right
+        self.assertAlmostEqual(math.degrees(yaw), 80.0)
+        _, _, yaw = o.update(-2 * quarter, 2 * quarter)                        # no gyro: wheels again
+        self.assertAlmostEqual(math.degrees(yaw), 170.0)
+
+    def test_gyro_bias_is_learnt_only_standing_still(self):
+        b = K.GyroBias(tau_s=1.0)
+        for _ in range(500):
+            b.update(0.01, 0.0, 0.0, 0.02)                     # standing: the gyro reads its bias
+        self.assertAlmostEqual(b.bias, 0.01, places=4)
+        self.assertAlmostEqual(b.update(0.51, 3.0, -3.0, 0.02), 0.5, places=4)   # turning: corrected, not learnt
+        self.assertAlmostEqual(b.bias, 0.01, places=4)
+
     def test_encoder_counts(self):
-        self.assertAlmostEqual(K.counts_to_rad(6533), 2 * math.pi)
-
-
-class HeadMapping(unittest.TestCase):
-    def test_limits_and_pulse_width(self):
-        h = Head()
-        self.assertAlmostEqual(h.pan.to_us(60), 1900, places=6)
-        self.assertAlmostEqual(h.pan.to_us(-90), 1100, places=6)      # clamped to -60°
-        self.assertAlmostEqual(h.tilt.to_us(12), 1580, places=6)
-
-    def test_slew_rate(self):
-        h = Head()
-        h.set_target(60, 0)
-        h.step(0.1)
-        self.assertAlmostEqual(h.state[0], 9.0, places=6)              # 90°/s × 0.1 s
-        for _ in range(100):
-            h.step(0.1)
-        self.assertAlmostEqual(h.state[0], 60.0)
-        self.assertAlmostEqual(h.gaze()[0], 1.0)
+        self.assertAlmostEqual(K.counts_to_rad(4480), 2 * math.pi)       # 64 CPR × 70:1
 
 
 class Safety(unittest.TestCase):
-    floor = [0.055] * 4
+    floor = [0.060] * 4
 
     def test_estop_and_timeout(self):
         self.assertEqual(gate(0.2, 0.5, estop=True, bumpers=0, cliff=self.floor, cmd_age_s=0).reason, 'estop')
@@ -88,21 +93,22 @@ class Safety(unittest.TestCase):
         self.assertEqual(v.linear, -0.2)
 
     def test_cliff(self):
-        v = gate(0.2, 0, estop=False, bumpers=0, cliff=[0.3, 0.055, 0.055, 0.055], cmd_age_s=0)
+        v = gate(0.2, 0, estop=False, bumpers=0, cliff=[0.3, 0.060, 0.060, 0.060], cmd_age_s=0)
         self.assertEqual(v.linear, 0.0)
-        v = gate(0.2, 0.3, estop=False, bumpers=0, cliff=[0.3, 0.3, 0.055, 0.055], cmd_age_s=0)
+        v = gate(0.2, 0.3, estop=False, bumpers=0, cliff=[0.3, 0.3, 0.060, 0.060], cmd_age_s=0)
         self.assertEqual((v.linear, v.angular, v.reason), (0.0, 0.0, 'lifted_or_cliff'))
 
     def test_invalid_reading_is_a_cliff(self):
-        v = gate(0.2, 0, estop=False, bumpers=0, cliff=[0.0, 0.055, 0.055, 0.055], cmd_age_s=0)
+        v = gate(0.2, 0, estop=False, bumpers=0, cliff=[0.0, 0.060, 0.060, 0.060], cmd_age_s=0)
         self.assertEqual(v.linear, 0.0)
 
 
 class Battery(unittest.TestCase):
     def test_soc_curve(self):
-        self.assertEqual(soc_from_voltage(16.8), 100.0)
-        self.assertEqual(soc_from_voltage(13.0), 0.0)
-        self.assertTrue(40 < soc_from_voltage(15.08) < 55)   # 3.77 V/cell
+        self.assertEqual(soc_from_voltage(14.6), 100.0)       # LiFePO4 4S, full on the charger
+        self.assertEqual(soc_from_voltage(11.0), 0.0)
+        self.assertAlmostEqual(soc_from_voltage(13.24), 50.0)  # 3.31 V/cell: the flat middle of the curve
+        self.assertLess(soc_from_voltage(12.8), soc_from_voltage(13.0))
 
     def test_policy(self):
         self.assertEqual(decide(50, charging=False, docked=False, temp_c=25, seeking=False), ('run', 15))
@@ -283,7 +289,7 @@ class DockingLoop(unittest.TestCase):
                 if tag:
                     obs.tag_offset, obs.tag_distance = tag
                 lin, ang = dock.step(obs, 0.05)
-                plant.target = list(K.twist_to_tracks(lin, ang))
+                plant.target = list(K.twist_to_wheels(lin, ang))
                 plant.charge_enable = dock.charge_enable
                 states.append(dock.state)
                 if trace is not None:
@@ -327,15 +333,23 @@ class Mood(unittest.TestCase):
         ev = m.update(bumpers=1, dock_state='IDLE', battery_action='run', gaze=(0.5, 0))
         self.assertEqual(ev, [])                                     # held bumper does not repeat
         ev = m.update(bumpers=0, dock_state='APPROACH', battery_action='seek_dock', gaze=(0.5, 0))
-        self.assertEqual([e['type'] for e in ev], ['curious'])
+        self.assertEqual([e['type'] for e in ev], ['low-battery'])
         ev = m.update(bumpers=0, dock_state='CONTACT', battery_action='seek_dock', gaze=(0.5, 0))
         self.assertEqual([e['type'] for e in ev], ['stroke'])
         ev = m.update(bumpers=0, dock_state='CHARGING', battery_action='charge', gaze=(0.0, 0))
-        self.assertEqual([e['type'] for e in ev], ['sleep'])
-        ev = m.update(bumpers=0, dock_state='UNDOCK', battery_action='run', gaze=(0.0, 0))
-        self.assertIn('wake', [e['type'] for e in ev])
+        self.assertEqual([e['type'] for e in ev], ['sleep', 'battery-ok'])   # no gaze while asleep
+        ev = m.update(bumpers=0, dock_state='UNDOCK', battery_action='run', gaze=None)
+        self.assertEqual([e['type'] for e in ev], ['wake', 'gaze-clear'])
         for e in ev:
             self.assertIn(e['type'], FACE_EVENTS)
+
+    def test_mute_is_a_face_state(self):
+        m = MoodMapper()
+        self.assertEqual(m.update(bumpers=0, dock_state='IDLE', battery_action='run', gaze=None, muted=True),
+                         [{'type': 'muted'}])
+        self.assertEqual(m.update(bumpers=0, dock_state='IDLE', battery_action='run', gaze=None, muted=True), [])
+        self.assertEqual(m.update(bumpers=0, dock_state='IDLE', battery_action='run', gaze=None, muted=False),
+                         [{'type': 'unmuted'}])
 
     def test_snapshot_brings_connecting_face_to_current_state(self):
         m = MoodMapper()
@@ -343,9 +357,9 @@ class Mood(unittest.TestCase):
             ev = m.snapshot(bumpers=0, dock_state=dock, battery_action='charge', gaze=(0.4, 0.1))
             self.assertEqual(ev, [{'type': 'sleep'}])                # asleep on the dock, gaze ignored
         ev = m.snapshot(bumpers=1, dock_state='APPROACH', battery_action='seek_dock', gaze=(0.3, -0.2))
-        self.assertEqual(ev, [{'type': 'wake'}, {'type': 'gaze', 'x': 0.3, 'y': -0.2}])  # tap/curious are moments
-        ev = m.snapshot(bumpers=0, dock_state='IDLE', battery_action='run', gaze=(0.0, 0.0))
-        self.assertEqual(ev, [{'type': 'wake'}])                     # a face that slept before a drop wakes up
+        self.assertEqual(ev, [{'type': 'wake'}, {'type': 'gaze', 'x': 0.3, 'y': -0.2}, {'type': 'low-battery'}])
+        ev = m.snapshot(bumpers=0, dock_state='IDLE', battery_action='run', gaze=None, muted=True, voice='speaking')
+        self.assertEqual(ev, [{'type': 'wake'}, {'type': 'speaking'}, {'type': 'muted'}])
         ev = m.update(bumpers=0, dock_state='CHARGING', battery_action='charge', gaze=(0.0, 0))
         self.assertEqual(ev, [{'type': 'sleep'}])                    # snapshot left the live mapper untouched
 

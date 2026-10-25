@@ -1,16 +1,11 @@
-# Luna runtime parameters. Values marked CALIBRATE must be measured on the assembled robot.
+# Luna R2 runtime parameters. Values marked CALIBRATE must be measured on the assembled robot.
 luna_base:
   ros__parameters:
     rate_hz: 50.0
-    turn_slip: 1.35          # CALIBRATE: skid-steer factor on the real floor
-    floor_nominal_m: 0.055   # CALIBRATE: VL53L4CD reading on flat floor
-
-luna_head:
-  ros__parameters:
-    pan_center_us: 1500.0    # CALIBRATE: CAD spline phase is not a live servo neutral
-    tilt_center_us: 1500.0   # CALIBRATE
-    pan_direction: 1
-    tilt_direction: 1
+    turn_slip: 1.0           # CALIBRATE: > 1 if a 360° turn on the spot comes out short on the real floor
+    floor_nominal_m: 0.060   # CALIBRATE: floor VL53L1X reading on flat floor (urdf windows at Z60)
+    use_gyro: true           # heading from the Gemini 336 gyro while it is fresh, else from the wheels
+    imu_topic: /camera/gyro/sample
 
 luna_dock:
   ros__parameters:
@@ -18,52 +13,62 @@ luna_dock:
 
 luna_dock_tag:
   ros__parameters:
-    cameras: [left, right]
+    cameras: [color]         # the Gemini 336 colour camera (apriltag_ros in /camera/color)
     tag_id: 0
-    max_age_s: 0.3           # fuse the two cameras' detections only when this close in time
-    tf_wait_s: 0.2           # how long a detection may wait for its tag TF and the head joint TF
+    max_age_s: 0.3           # with a second camera: fuse detections only when this close in time
+    tf_wait_s: 0.2           # how long a detection may wait for its tag TF
 
 luna_sim_camera:             # tags:=sim only
   ros__parameters:
-    cameras: [left, right]
     rate_hz: 10.0
     noise: 2.0
     blur_px: 0.0
 
 luna_face_bridge:
   ros__parameters:
-    host: 127.0.0.1          # 0.0.0.0 only on a trusted LAN (phone face)
+    host: 127.0.0.1          # the face page is served here for the kiosk browser on the head; 0.0.0.0 only on a trusted LAN
     port: 8765
-    allowed_origin: http://127.0.0.1:4173
+    allowed_origin: http://127.0.0.1:8765   # the face page's own origin (served by this bridge)
+    web_dir: ''              # '' = the installed package's web/ (face.html, face.js, robot-link.js)
 
-luna_audio:                  # ReSpeaker XVF3800 under the head top shell (R07)
+luna_audio:                  # ReSpeaker Mic Array v2.0 on the shoulder plate, fixed to the body
   ros__parameters:
     doa_source: usb          # usb | mock | off  (launch: doa:=...)
     doa_rate_hz: 10.0
     doa_zero_deg: 0.0        # CALIBRATE: board azimuth for a voice straight ahead of the face
-    doa_direction: 1         # CALIBRATE: -1 if the board counts against the pan direction
+    doa_direction: 1         # CALIBRATE: -1 if the board counts clockwise seen from above
     capture: true            # microphone capture; with push_to_talk nothing is kept unless the face was touched
     listen_mode: push_to_talk  # push_to_talk: one question per touch on the face | always: every utterance (wake word later)
     listen_window_s: 6.0     # after a touch: time to start speaking
-    alsa_device: auto        # auto = the XVF3800 card from /proc/asound/cards
+    alsa_device: auto        # auto = the array's card from /proc/asound/cards (ArrayUAC10); never ALSA's default
     rate: 16000
-    channels: 2              # Seeed USB firmware v2.x: 2 channels at 16 kHz (6-channel firmware differs)
-    capture_channel: 0       # CALIBRATE: which channel carries the processed (ASR) beam on this firmware
+    channels: 6              # Seeed's default 6-channel firmware: 0 = processed beam, 1–4 raw mics, 5 playback
+    capture_channel: 0       # CALIBRATE: 0 on the 6-channel firmware (the 1-channel firmware: channels 1)
     utterance_dir: /tmp/luna_utterances
     keep_utterances: 5
-    speaker_elevation_deg: 25.0   # CALIBRATE: assumed voice height above the base plane (planar array, tilted head)
-    start_muted: false       # mute is software only (/luna/audio/mute): the board's buttons are inside the head
-    head_moving_deg_s: 2.0   # head faster than this: DoA/speech ignored, no new utterance (tilt servo ~49 mm from a mic)
-    head_settle_s: 0.3
+    start_muted: false       # software mute (/luna/audio/mute); the privacy slider cuts the array's power instead
+    turning_rad_s: 0.15      # body turning faster than this: DoA/speech ignored, no new utterance (gearmotor noise)
+    turn_settle_s: 0.3
 
-luna_attention:
+luna_attention:              # R2 has a fixed head: the eyes look, the body turns for a person well off to the side
   ros__parameters:
-    max_pan_deg: 50.0        # head limit is ±60°, tilt ±12° (core/head.py); attention stays inside
-    listen_tilt_deg: 4.0     # CALIBRATE: look slightly up at a standing person
+    gaze_range_deg: 60.0     # a person this far off centre puts the eyes at the screen edge
+    listen_elevation_deg: 15.0   # CALIBRATE: assumed height of a voice with no face seen near it
     turn_rate_deg_s: 30.0
-    deadband_deg: 12.0
+    deadband_deg: 12.0       # a voice this close to straight ahead: eyes only
+    face_deadband_deg: 22.0  # a face: the camera sees ±31°, turn before it leaves the picture
     min_speech_s: 0.3
     hold_s: 4.0
+    face_hold_s: 1.0
+
+luna_face_track:             # Raspberry Pi Camera v2 over the screen (CSI); images stay in memory
+  ros__parameters:
+    device: auto             # auto = CSI through GStreamer (nvarguscamerasrc); or a V4L2 path / index for a USB camera
+    sensor_id: 0
+    rate_hz: 10.0
+    model: /models/face/face_detection_yunet_2023mar.onnx
+    min_score: 0.75
+    min_width_px: 24.0       # ≈ 3 m away at 640 px: further off, no eye contact
 
 luna_stt:                    # speech-to-text on the robot; the WAV is deleted once read
   ros__parameters:
@@ -71,9 +76,9 @@ luna_stt:                    # speech-to-text on the robot; the WAV is deleted o
     stt_url: http://127.0.0.1:8178/inference
     stt_command: whisper-cli -m /models/whisper/ggml-large-v3-turbo-q5_0.bin -l {lang} -nt -np -f {wav}
     language: tr
-    timeout_s: 20.0          # MEASURE on the Xavier: large-v3-turbo vs small, GPU build
+    timeout_s: 20.0          # MEASURE on the Orin NX: large-v3-turbo vs small, GPU build
     prompt: ''               # "Luna" as a prompt did not fix the name (M4, 2026-10-25) and made noise hallucinate with audio_ctx
-    audio_ctx: 0             # 0 = full 30 s window; 768 (≈15 s) halved the time on an M4 at equal accuracy: try on the Xavier
+    audio_ctx: 0             # 0 = full 30 s window; 768 (≈15 s) halved the time on an M4 at equal accuracy: try on the Orin
     min_chars: 2
     delete_wav: true
     reply_on_failure: true   # "Seni tam anlayamadım…" instead of silence after a touch
@@ -118,15 +123,16 @@ luna_mock_mcu:
   ros__parameters:
     start_soc: 0.24          # below the 25 % seek threshold: the mock docks by itself
     dock_distance_m: 1.2
-    drain_w: 44.0
+    drain_w: 35.0
     start_y_m: 0.0           # start pose relative to the dock axis (left +)
     start_yaw_deg: 0.0
 
 luna_sim2d:                  # sim:=true (2D room with LiDAR); start_soc comes from the sim_soc launch argument
   ros__parameters:
     start_pose: [0.0, 0.0, 0.0]   # world frame; keep (0, 0, 0) so the SLAM map frame equals the sim world
-    true_turn_slip: 1.42     # real skid vs. base turn_slip 1.35: odometry over-reports turns, SLAM corrects
-    linear_slip: 0.02
+    true_turn_slip: 1.03     # wheels slip a little in turns vs. base turn_slip 1.0; the sim gyro has the truth
+    linear_slip: 0.01
+    gyro: true               # the Gemini 336 gyro (/camera/gyro/sample), with a small bias base_node learns
 
 luna_dock_nav:
   ros__parameters:

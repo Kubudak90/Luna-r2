@@ -11,10 +11,6 @@ float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v
 
 }  // namespace
 
-float clamp_finite(float v, float lo, float hi, float fallback) {
-  return std::isfinite(v) ? clampf(v, lo, hi) : fallback;
-}
-
 void DriveController::set_target(float left, float right, float pwm_cap, uint32_t now_ms) {
   have_cmd_ = true;
   cmd_ms_ = now_ms;

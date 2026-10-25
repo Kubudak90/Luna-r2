@@ -6,7 +6,7 @@ void CliffChannel::on_sample(uint8_t range_status, uint16_t distance_mm, uint32_
   if (!alive_) return;
   have_ = true;
   t_ms_ = now_ms;
-  m_ = range_status == VL53L4CD_STATUS_VALID ? distance_mm * 0.001f : 0.0f;   // invalid → 0 at once
+  m_ = range_status == TOF_STATUS_VALID ? distance_mm * 0.001f : 0.0f;   // invalid → 0 at once
 }
 
 float CliffChannel::metres(uint32_t now_ms) const {

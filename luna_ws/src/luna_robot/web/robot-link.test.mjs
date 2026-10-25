@@ -1,13 +1,8 @@
-// node --test web/robot-link.test.mjs   (uses the real face core from Telefon Yüzü R01)
+// cd web && npm test   (robot-link.js driving the real face core, web/face-core.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import { connectRobot, parseRobotEvent, sendTalk, watchTalkGestures } from './robot-link.js';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const corePath = path.join(here, '..', '..', 'Telefon Yüzü R01 2026-10-07', 'Kaynaklar', 'luna-face', 'dist', 'face', 'core.js');
-const { createFaceCore } = await import(corePath);
+import { createFaceCore } from './face-core.js';
+import { ROBOT_FACE_EVENTS, connectRobot, parseRobotEvent, sendTalk, watchTalkGestures } from './robot-link.js';
 
 class FakeSource {
   constructor(url) { this.url = url; FakeSource.last = this; this.closed = false; }
@@ -17,6 +12,9 @@ class FakeSource {
 
 test('only face-core events pass, gaze is clamped', () => {
   assert.deepEqual(parseRobotEvent('{"type":"tap"}'), { type: 'tap', data: {} });
+  for (const type of ['thinking', 'speaking', 'low-battery', 'battery-ok', 'muted', 'unmuted']) {
+    assert.deepEqual(parseRobotEvent(JSON.stringify({ type })), { type, data: {} }, type);
+  }
   assert.deepEqual(parseRobotEvent('{"type":"gaze","x":4,"y":-0.5}'), { type: 'gaze', data: { x: 1, y: -0.5 } });
   assert.equal(parseRobotEvent('{"type":"explode"}'), null);
   assert.equal(parseRobotEvent('not json'), null);
@@ -37,10 +35,10 @@ test('robot bump surprises the real face, docking puts it to sleep, undock wakes
   src.emit('garbage');
   src.emit({ type: 'sleep' });
   face.step(500);
-  assert.equal(face.sample().mode, 'asleep');
+  assert.equal(face.sample().mode, 'sleep');
   src.emit({ type: 'wake' });
   face.step(500);
-  assert.notEqual(face.sample().mode, 'asleep');
+  assert.notEqual(face.sample().mode, 'sleep');
   stop();
   assert.equal(src.closed, true);
   assert.deepEqual(statuses, ['connected', 'closed']);
@@ -53,22 +51,50 @@ test('missing EventSource degrades quietly', () => {
   assert.deepEqual(seen, ['unavailable']);
 });
 
-test('voice states reach the real face with existing events: listening looks curious, speaking looks happy', () => {
+test('every face_mood event reaches the real face: voice, battery and mute each have their own look', () => {
   const face = createFaceCore({ seed: 3 });
   const stop = connectRobot(face, { url: 'http://127.0.0.1:8765/events', EventSourceImpl: FakeSource });
   const src = FakeSource.last;
   face.step(1000);
-  src.emit({ type: 'curious' });              // core/face_mood.VoiceMood: listening, thinking
+  for (const [event, mode] of [['listening', 'listening'], ['thinking', 'thinking'], ['speaking', 'speaking'],
+    ['idle', 'idle']]) {
+    src.emit({ type: event });
+    face.step(500);
+    assert.equal(face.sample().mode, mode, event);
+  }
+  src.emit({ type: 'low-battery' });
   face.step(500);
-  assert.equal(face.sample().mode, 'curious');
-  src.emit({ type: 'stroke' });               // VoiceMood: speaking
+  assert.equal(face.sample().mode, 'tired');
+  assert.ok(face.sample().expr.tired > 0.9);                // battery glyph
+  src.emit({ type: 'muted' });
   face.step(500);
-  assert.equal(face.sample().mode, 'happy');
-  face.step(2_600);                           // the bridge re-sends before the reaction runs out
-  src.emit({ type: 'stroke' });
-  face.step(500);
-  assert.equal(face.sample().mode, 'happy');
+  assert.ok(face.sample().muted && face.sample().expr.mute > 0.9);
+  src.emit({ type: 'battery-ok' }); src.emit({ type: 'unmuted' });
+  face.step(1500);
+  assert.equal(face.sample().mode, 'idle');
+  assert.ok(face.sample().expr.tired < 0.01 && face.sample().expr.mute < 0.01);
   stop();
+});
+
+test('robot gaze moves the eyes: +x (Luna\'s left) to the screen\'s right, +y up; gaze-clear lets them wander', () => {
+  const face = createFaceCore({ seed: 5 });
+  const stop = connectRobot(face, { url: 'http://127.0.0.1:8765/events', EventSourceImpl: FakeSource });
+  const src = FakeSource.last;
+  src.emit({ type: 'gaze', x: 0.8, y: 0.5 });
+  face.step(600);
+  assert.ok(face.sample().gaze.x > 0.7 && face.sample().gaze.y < -0.35, JSON.stringify(face.sample().gaze));
+  src.emit({ type: 'gaze', x: 9, y: 'up' });                 // not a number: dropped by robot-link
+  face.step(300);
+  assert.ok(face.sample().gaze.x > 0.7);
+  src.emit({ type: 'gaze-clear' });
+  face.step(100);
+  assert.equal(face.sample().looking, false);
+  stop();
+});
+
+test('the ROBOT_FACE_EVENTS list is the face core\'s', () => {
+  assert.deepEqual([...ROBOT_FACE_EVENTS].sort(), ['battery-ok', 'curious', 'gaze', 'gaze-clear', 'idle', 'listening',
+    'low-battery', 'muted', 'sleep', 'speaking', 'stroke', 'tap', 'thinking', 'unmuted', 'wake']);
 });
 
 class FakeTarget {
@@ -131,12 +157,34 @@ test('connectRobot sends a tap on the real face to /talk next to /events and sti
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(posts, ['http://127.0.0.1:8765/talk']);
   face.step(1000);
-  src.emit({ type: 'curious' });                 // the bridge: Luna listens
+  src.emit({ type: 'listening' });               // the bridge: Luna listens
   face.step(500);
-  assert.equal(face.sample().mode, 'curious');
+  assert.equal(face.sample().mode, 'listening');
   stop();
   assert.equal(stage.count(), 0);
   assert.equal(src.closed, true);
+});
+
+test('asleep on the dock or with the microphones cut, a touch stays on the face and nothing is posted', async () => {
+  const face = createFaceCore({ seed: 2 });
+  const stage = new FakeTarget(), posts = [], talks = [];
+  const stop = connectRobot(face, { url: 'http://127.0.0.1:8765/events', EventSourceImpl: FakeSource, talkTarget: stage,
+    canTalk: face.canTalk, onTalk: (kind, sent) => { talks.push([kind, sent]); if (!sent) face.touch('refused'); },
+    fetchImpl: async url => { posts.push(url); return { ok: true }; } });
+  const src = FakeSource.last;
+  src.emit({ type: 'sleep' });
+  stage.emit('pointerdown'); stage.emit('pointerup');
+  face.step(300);
+  assert.ok(face.sample().expr.R.h > face.sample().expr.L.h + 0.1);   // one sleepy eye peeks open
+  src.emit({ type: 'wake' }); src.emit({ type: 'muted' });
+  stage.emit('pointerdown'); stage.emit('pointerup');
+  assert.ok(face.sample().shakeLeft > 0);                              // "no": the microphones are off
+  src.emit({ type: 'unmuted' });
+  stage.emit('pointerdown'); stage.emit('pointerup');
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(talks, [['tap', false], ['tap', false], ['tap', true]]);
+  assert.deepEqual(posts, ['http://127.0.0.1:8765/talk']);
+  stop();
 });
 
 test('without a talk target nothing listens for touches (old behaviour)', () => {

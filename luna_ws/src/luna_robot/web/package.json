@@ -1,0 +1,8 @@
+{
+  "name": "luna-face",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Luna R2'nin kafadaki ekranda çalışan yüzü ve robotun yüz köprüsüne bağlantısı",
+  "scripts": { "test": "node --test face-core.test.mjs robot-link.test.mjs" }
+}

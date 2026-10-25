@@ -10,13 +10,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from luna_robot.core import kinematics as K
 from luna_robot.core.dock import Dock, Obs
 from luna_robot.core.dock_nav import Pose2D, front_points, pre_dock_pose, wall_normal_yaw
-from luna_robot.core.sim2d import LASER_X, LASER_YAW, Room, Sim2D, SimConfig, beam_toward, box, default_room, raycast
+from luna_robot.core.sim2d import (DOCK_MAST, LASER_X, LASER_YAW, ROBOT_RADIUS, BUMPER_TRAVEL, Room, Sim2D, SimConfig,
+                                   beam_toward, bumper_bits, box, default_room, raycast)
 
-SQUARE = Room(walls=box(-2.0, -2.0, 2.0, 2.0), dock=Pose2D(0.0, 1.75, math.pi / 2))
+SQUARE = Room(walls=box(-2.0, -2.0, 2.0, 2.0), dock=Pose2D(0.0, 2.0 - DOCK_MAST[1], math.pi / 2))
 
 
 def drive(sim, v, w, seconds, dt=0.02):
-    sim.target = list(K.twist_to_tracks(v, w))
+    sim.target = list(K.twist_to_wheels(v, w))
     for _ in range(round(seconds / dt)):
         sim.step(dt)
 
@@ -34,7 +35,7 @@ class Lidar(unittest.TestCase):
         scan = sim.scan()
         n = len(scan)
         self.assertEqual(n, SimConfig().beams)
-        ahead = scan[beam_toward(0.0, n)]             # R08: the laser frame is turned −90°, so not the middle beam
+        ahead = scan[beam_toward(0.0, n)]             # the laser frame is turned −90°, so not the middle beam
         behind = scan[beam_toward(math.pi, n)]
         self.assertAlmostEqual(ahead, 2.0 - LASER_X, places=6)
         self.assertAlmostEqual(behind, 2.0 + LASER_X, places=6)
@@ -50,7 +51,7 @@ class Motion(unittest.TestCase):
         sim = Sim2D(SQUARE, SimConfig(true_turn_slip=K.DriveLimits().turn_slip, linear_slip=0.0))
         odo = K.Odometry()
         odo.update(*sim.pos)
-        sim.target = list(K.twist_to_tracks(0.2, 0.4))
+        sim.target = list(K.twist_to_wheels(0.2, 0.4))
         for _ in range(100):                                                 # base_node integrates every MCU sample
             sim.step(0.02)
             x, y, yaw = odo.update(*sim.pos)
@@ -82,7 +83,7 @@ class Motion(unittest.TestCase):
     def test_wall_stops_the_robot_and_presses_the_front_bumper(self):
         sim = Sim2D(SQUARE)
         drive(sim, 0.3, 0.0, 10.0)
-        self.assertAlmostEqual(sim.pose.x, 2.0 - 0.17, delta=0.02)          # front face against the east wall
+        self.assertAlmostEqual(sim.pose.x, 2.0 - (ROBOT_RADIUS - BUMPER_TRAVEL), delta=0.005)   # ring pressed home on the wall
         self.assertEqual(sim.bumpers & 0b0011, 0b0011)
         self.assertEqual(sim.bumpers & 0b1100, 0)
         drive(sim, -0.1, 0.0, 1.0)
@@ -92,6 +93,19 @@ class Motion(unittest.TestCase):
         sim = Sim2D(SQUARE)
         drive(sim, -0.2, 0.0, 15.0)
         self.assertEqual(sim.bumpers & 0b1100, 0b1100)
+
+
+class BumperRing(unittest.TestCase):
+    def test_switches_by_contact_angle(self):
+        for deg, bits in ((0, 0b0011), (15, 0b0011), (45, 0b0001), (-45, 0b0010), (89, 0b0001),
+                          (180, 0b1100), (135, 0b0100), (-135, 0b1000), (-91, 0b1000)):
+            self.assertEqual(bumper_bits(math.radians(deg)), bits, deg)
+
+    def test_side_touch_presses_one_switch(self):
+        # the north wall 80° to Luna's left (exactly 90° would be the seam between the two halves)
+        sim = Sim2D(SQUARE, start=Pose2D(0.0, 2.0 - ROBOT_RADIUS + 0.005, math.radians(10)))
+        sim.step(0.01)
+        self.assertEqual(sim.bumpers, 0b0001)
 
 
 class DockScene(unittest.TestCase):
@@ -137,21 +151,24 @@ class DockScene(unittest.TestCase):
                 if tag:
                     o.tag_offset, o.tag_distance = tag
                 lin, ang = dock.step(o, 0.05)
-                sim.target = list(K.twist_to_tracks(lin, ang))
+                sim.target = list(K.twist_to_wheels(lin, ang))
                 states.append(dock.state)
             sim.step(0.01)
         self.assertEqual(dock.state, 'CHARGING')
         self.assertNotIn('BACKOFF', states)
         err = math.hypot(sim.pose.x - room.dock.x, sim.pose.y - room.dock.y)
-        self.assertLess(err, 0.02)
+        self.assertLess(err, SimConfig().dock_y_tol_m)   # ≈ 0.43 × the 8 cm: the funnel takes it (not modelled)
 
-    def test_misaligned_robot_hits_the_dock_with_its_bumper(self):
+    def test_misaligned_robot_stops_at_the_wheel_stops_without_contact(self):
+        # 8 cm beside the axis the funnel rail stops a wheel: no contact, no charging, and nothing for the bumper
+        # ring to feel (the mast is 0.45 m ahead, the ring reaches 0.18 m). dock_node backs off on the timeout.
         room = default_room()
         d = room.dock
-        sim = Sim2D(room, start=Pose2D(d.x + 0.08, d.y - 0.3, d.yaw))      # 8 cm beside the dock axis
+        sim = Sim2D(room, start=Pose2D(d.x + 0.08, d.y - 0.3, d.yaw))
         drive(sim, 0.06, 0.0, 8.0)
         self.assertFalse(sim.docked)
-        self.assertEqual(sim.bumpers & 0b0011, 0b0011)
+        self.assertEqual(sim.bumpers, 0)
+        self.assertAlmostEqual(sim.pose.y, d.y, delta=0.01)
 
     def test_skewed_robot_does_not_make_contact(self):
         room = default_room()
@@ -159,7 +176,17 @@ class DockScene(unittest.TestCase):
         sim = Sim2D(room, start=Pose2D(d.x, d.y - 0.01, d.yaw + 0.35))      # on the axis, 20° skewed
         drive(sim, 0.02, 0.0, 2.0)
         self.assertFalse(sim.docked)
+        self.assertEqual(sim.bumpers, 0)
+
+    def test_overrunning_the_seat_meets_the_mast_with_the_ring(self):
+        # Wheel stops gone (lifted dock, a child pushing): the mast is the first thing the round body meets.
+        room = default_room()
+        d = room.dock
+        sim = Sim2D(room, SimConfig(dock_capture_m=0.0), start=Pose2D(d.x, d.y - 0.3, d.yaw))
+        drive(sim, 0.1, 0.0, 10.0)
         self.assertEqual(sim.bumpers & 0b0011, 0b0011)
+        self.assertAlmostEqual(sim.pose.y, d.y + DOCK_MAST[0] - (ROBOT_RADIUS - BUMPER_TRAVEL), delta=0.005)
+        self.assertEqual({c.kind for c in sim.contacts}, {'bumper'})
 
     def test_wall_fit_on_the_dock_recovers_the_dock_axis(self):
         # Docked 0.15 rad skewed (the funnel allows it): the noisy scan of the wall still gives the true axis.

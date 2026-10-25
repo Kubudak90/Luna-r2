@@ -1,4 +1,4 @@
-"""Speaker output: /luna/assistant/reply → text-to-speech → the XVF3800's speaker output; /luna/voice/speaking
+"""Speaker output: /luna/assistant/reply → text-to-speech → the mic array's 3.5 mm output (amplifier, speaker); /luna/voice/speaking
 tells attention (own voice is not a speaker), the microphones (no question while Luna talks) and the face.
 A touch on the face (/luna/voice/talk) cuts Luna off: the queue is dropped and the sentence stops.
 

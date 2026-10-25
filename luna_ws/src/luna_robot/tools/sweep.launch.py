@@ -1,4 +1,4 @@
-"""Nodes under test for tools/tag_sweep.py: robot_state_publisher, apriltag_ros on camera_left, dock_tag_node.
+"""Nodes under test for tools/tag_sweep.py: robot_state_publisher, apriltag_ros on the colour camera, dock_tag_node.
     ros2 launch tools/sweep.launch.py decimate:=2.0        (from luna_ws/src/luna_robot, workspace sourced)"""
 import os
 
@@ -16,12 +16,12 @@ def _nodes(context):
     decimate = float(context.perform_substitution(LaunchConfiguration('decimate')))
     return [
         Node(package='robot_state_publisher', executable='robot_state_publisher', parameters=[{'robot_description': urdf}]),
-        Node(package='apriltag_ros', executable='apriltag_node', name='apriltag', namespace='camera_left',
+        Node(package='apriltag_ros', executable='apriltag_node', name='apriltag', namespace='camera/color',
              parameters=[os.path.join(share, 'config', 'apriltag.yaml'),
-                         {'tag.frames': ['dock_tag_left'], 'detector.decimate': decimate}],
+                         {'tag.frames': ['dock_tag_color'], 'detector.decimate': decimate}],
              remappings=[('image_rect', 'image_raw')]),
         Node(package='luna_robot', executable='dock_tag_node', name='luna_dock_tag',
-             parameters=[os.path.join(share, 'config', 'luna.yaml'), {'cameras': ['left']}]),
+             parameters=[os.path.join(share, 'config', 'luna.yaml')]),
     ]
 
 

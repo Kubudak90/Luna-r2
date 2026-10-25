@@ -1,5 +1,5 @@
-"""Pinhole model of the head cameras (Arducam inVisCam B0630, 1/2.8" STARVIS 2, 3.7 mm M12 lens, 82°×66° FOV per
-the UCTRONICS listing). Points are in the ROS optical frame: z forward out of the lens, x right, y down."""
+"""Pinhole models of R2's cameras: the Gemini 336 colour camera (dock tag) and the Raspberry Pi Camera v2 over the
+screen (faces). Points are in the ROS optical frame: z forward out of the lens, x right, y down."""
 import math
 from dataclasses import dataclass
 
@@ -41,7 +41,8 @@ class Pinhole:
                 margin_px + r <= uv[1] <= self.height - 1 - margin_px - r)
 
 
-# 1280×720 MJPG is the chosen mode (B0630 offers YUY2 only up to 640×480). Nominal until calibrated: the lens
-# has < −13 % distortion and the 82° figure is the vendor's, so camera_info/*.yaml must be replaced by a real
-# calibration (ros2 run camera_calibration cameracalibrator) before distances are trusted near the image edges.
-B0630_720P = Pinhole.from_hfov(1280, 720, 82.0)
+# Gemini 336 colour at 1280 × 720 (the driver scales its 1920 × 1080 sensor), 86° × 55° per Orbbec. Nominal: the real
+# driver publishes the factory calibration on /camera/color/camera_info; sim_camera_node and the checks use this.
+GEMINI_COLOR_720P = Pinhole.from_hfov(1280, 720, 86.0)
+# Raspberry Pi Camera v2 (IMX219, 3.04 mm) binned to 640 × 480 for the face detector, 62.2° × 48.8°. Nominal.
+PICAM_V2_480P = Pinhole.from_hfov(640, 480, 62.2)

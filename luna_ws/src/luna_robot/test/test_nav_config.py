@@ -1,4 +1,4 @@
-"""Static checks of the SLAM / Nav2 configuration: the robot's numbers, and the rule that Nav2 reaches the tracks
+"""Static checks of the SLAM / Nav2 configuration: the robot's numbers, and the rule that Nav2 reaches the wheels
 only through /cmd_vel, i.e. base_node's mux and safety gate. The YAML checks need PyYAML (present wherever ROS is;
 skipped on a bare Mac Python). Run from luna_ws/src/luna_robot:  python3 -m unittest discover -s test"""
 import ast
@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from luna_robot import topics as T
 from luna_robot.core import kinematics as K
 from luna_robot.core.safety import SafetyConfig
-from luna_robot.core.sim2d import HALF_LENGTH, HALF_WIDTH
+from luna_robot.core.sim2d import ROBOT_RADIUS
 from luna_robot.core.tof import FRAMES, TofConfig
 
 try:
@@ -92,30 +92,27 @@ class Numbers(unittest.TestCase):
             node = node[key]
         return node
 
-    def test_footprint_is_the_r06_track_base(self):
-        want = [[HALF_LENGTH, HALF_WIDTH], [HALF_LENGTH, -HALF_WIDTH], [-HALF_LENGTH, -HALF_WIDTH],
-                [-HALF_LENGTH, HALF_WIDTH]]
+    def test_footprint_is_the_round_r2_base(self):
         for costmap in ('local_costmap', 'global_costmap'):
             with self.subTest(costmap=costmap):
-                fp = yaml.safe_load(self.p(costmap, costmap, 'ros__parameters', 'footprint'))
-                self.assertEqual(fp, want)
-        self.assertAlmostEqual(2 * HALF_LENGTH, 0.340)
-        self.assertAlmostEqual(2 * HALF_WIDTH, 0.378)
+                cm = self.p(costmap, costmap, 'ros__parameters')
+                self.assertNotIn('footprint', cm)                       # a polygon would override robot_radius
+                self.assertEqual(cm['robot_radius'], ROBOT_RADIUS)
+        self.assertAlmostEqual(2 * ROBOT_RADIUS, 0.360)
 
-    def test_turning_in_place_stays_inside_the_planners_obstacle_margin(self):
-        # NavFn (global costmap) treats cells within the inscribed radius (min half side + padding) as obstacles; RPP
-        # turns Luna in place, sweeping the unpadded circumscribed circle: the first must cover the second (dock
-        # course, shoe box). The controller's local costmap keeps the real footprint for its collision checks.
-        sweep = math.hypot(HALF_LENGTH, HALF_WIDTH)
+    def test_round_base_keeps_narrow_doorways_open(self):
+        # Round and turning about its centre, R2 sweeps nothing beyond its outline: the planner's padding is only a
+        # margin for map error, not R1's 0.14 m turning margin that closed 0.70 m doorways.
         glob = self.p('global_costmap', 'global_costmap', 'ros__parameters')
-        pad = glob['footprint_padding']
-        self.assertGreaterEqual(min(HALF_LENGTH, HALF_WIDTH) + pad, sweep + 0.05)    # 5 cm to spare
-        self.assertGreater(glob['inflation_layer']['inflation_radius'], math.hypot(HALF_LENGTH + pad, HALF_WIDTH + pad))
-        # the price: doorways narrower than ≈ 0.75 m close (sim worlds door70/75/80: 0.70 closed, 0.75 and 0.80 open)
-        self.assertLess(2 * (HALF_LENGTH + pad) + glob['resolution'], 0.75)
+        r = ROBOT_RADIUS + glob['footprint_padding']
+        self.assertLessEqual(glob['footprint_padding'], 0.05)
+        self.assertGreater(glob['inflation_layer']['inflation_radius'], r)
+        self.assertLess(2 * r + glob['resolution'], 0.60)              # on paper: door60 open (marginal in the sim)
         infl = glob['inflation_layer']
-        door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.375 - (HALF_LENGTH + pad)))
-        self.assertLess(door_cost, 253)                                 # the middle of a 0.75 m doorway is free
+        door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.30 - r))
+        self.assertLess(door_cost, 253)                                 # the middle of a 0.60 m doorway is free
+        local = self.p('local_costmap', 'local_costmap', 'ros__parameters')
+        self.assertGreater(local['inflation_layer']['inflation_radius'], ROBOT_RADIUS + local['footprint_padding'])
 
     def test_recoveries_keep_what_only_the_camera_and_tof_saw(self):
         # ClearEntireCostmap wipes the voxel and ToF layers too: a low obstacle beside the robot is then forgotten.
@@ -142,7 +139,7 @@ class Numbers(unittest.TestCase):
         self.assertLessEqual(rpp['rotate_to_heading_angular_vel'], lim.max_angular)
         self.assertLessEqual(self.p('behavior_server', 'ros__parameters', 'max_rotational_vel'), lim.max_angular)
 
-    def test_skid_steer_turns_in_place_and_slows_near_obstacles(self):
+    def test_turns_in_place_and_slows_near_obstacles(self):
         rpp = self.p('controller_server', 'ros__parameters', 'FollowPath')
         self.assertTrue(rpp['use_rotate_to_heading'])
         self.assertFalse(rpp['allow_reversing'])
@@ -167,7 +164,7 @@ class Numbers(unittest.TestCase):
         self.assertEqual((self.slam['base_frame'], self.slam['odom_frame'], self.slam['map_frame']),
                          ('base_footprint', 'odom', 'map'))
         urdf = read('urdf/luna.urdf')
-        for frame in ('laser', 'oakd_link', 'oak_rgb_camera_optical_frame') + FRAMES:   # poses only there (R08)
+        for frame in ('laser', 'camera_link', 'camera_color_optical_frame', 'camera_depth_optical_frame') + FRAMES:
             self.assertIn(f'<link name="{frame}"/>', urdf)
 
     def test_slam_matches_the_rplidar_c1(self):
@@ -216,7 +213,7 @@ class ObstacleSensors(unittest.TestCase):
                 self.assertEqual((mark['marking'], mark['clearing'], clear['marking'], clear['clearing']),
                                  (True, False, False, True))
                 self.assertAlmostEqual(mark['min_obstacle_height'], 0.03)
-                self.assertAlmostEqual(mark['max_obstacle_height'], 0.62)
+                self.assertAlmostEqual(mark['max_obstacle_height'], 0.58)
                 self.assertLess(clear['min_obstacle_height'], 0.0)              # floor points clear
                 self.assertGreaterEqual(vox['z_voxels'] * vox['z_resolution'], mark['max_obstacle_height'])
                 self.assertLessEqual(vox['z_voxels'], 16)
@@ -228,7 +225,7 @@ class ObstacleSensors(unittest.TestCase):
                     # a max_range arc ("nothing nearer") clears but never marks
                     self.assertLess(src['obstacle_max_range'], TofConfig().max_m)
                     self.assertGreater(src['raytrace_max_range'], TofConfig().max_m)
-                    self.assertLess(src['min_obstacle_height'], 0.101)              # the windows are at Z101
+                    self.assertLess(src['min_obstacle_height'], 0.100)              # the windows are at Z100
 
     def test_robot_top_fits_under_the_obstacle_band(self):
         from luna_robot.core.sim2d import robot_bands
@@ -252,7 +249,7 @@ class ObstacleSensors(unittest.TestCase):
         # every polygon, or an empty cone would slow the robot down.
         cm = self.base['collision_monitor']['ros__parameters']
         slow_x = max(cm['PolygonSlow']['points'][0::2])
-        self.assertGreater(HALF_LENGTH + TofConfig().max_m, slow_x + 0.2)
+        self.assertGreater(ROBOT_RADIUS + TofConfig().max_m, slow_x + 0.2)
 
 
 if __name__ == '__main__':

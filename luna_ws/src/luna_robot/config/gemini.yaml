@@ -1,0 +1,28 @@
+# OrbbecSDK_ROS2 (v2.x, Humble) parameters for the front Orbbec Gemini 336, used by depth:=gemini
+# (launch/luna.launch.py, gemini_330_series.launch.py). Every key is a launch argument of OrbbecSDK_ROS2 v2.9.3's
+# gemini_330_series.launch.py (checked 25.10.2026; docker/Dockerfile builds that tag). NOT TRIED with a camera.
+#   depth  640×400 at 15 fps → /camera/depth/points in camera_depth_optical_frame (Nav2's voxel layer, collision_monitor)
+#   colour 1280×720 at 15 fps → /camera/color/image_raw + camera_info (apriltag_ros, dock tag)
+#   gyro   → /camera/gyro/sample (base_node's heading); the accelerometer is not used
+# The driver publishes its frames from the factory calibration below camera_link (urdf pose); luna.launch.py then
+# drops the URDF's copies of the two optical frames.
+camera_name: camera
+enable_point_cloud: 'true'
+enable_colored_point_cloud: 'false'
+depth_registration: 'false'
+enable_color: 'true'
+color_width: '1280'
+color_height: '720'
+color_fps: '15'
+enable_depth: 'true'
+depth_width: '640'
+depth_height: '400'
+depth_fps: '15'
+enable_left_ir: 'false'
+enable_right_ir: 'false'
+enable_gyro: 'true'
+enable_accel: 'false'
+gyro_rate: 200hz
+publish_tf: 'true'
+tf_publish_rate: '0.0'
+laser_energy_level: '-1'

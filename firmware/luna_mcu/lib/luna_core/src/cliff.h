@@ -1,4 +1,4 @@
-// Floor-facing VL53L4CD channel → metres for /luna/mcu/cliff. Plain C++, host-tested.
+// Floor-facing VL53L1X channel → metres for /luna/mcu/cliff. Plain C++, host-tested.
 // Fail-safe contract with the AGX safety gate: 0.0 means "no usable floor reading" and is
 // treated as a cliff. A channel reports 0.0 when the sensor never initialised, dropped off the
 // bus, has not produced a sample yet, its last sample was not valid, or that sample is stale.
@@ -7,10 +7,11 @@
 
 namespace luna {
 
-// VL53L4CD ULD range_status after the driver's remapping: 0 is the only "distance valid".
-// Everything else (1 sigma, 2 signal, 3 below min range, 4/7 wrap, 5 HW fail, 6 no wrap check,
-// 255 other ...) is treated as invalid on purpose: this sensor guards a stair edge.
-constexpr uint8_t VL53L4CD_STATUS_VALID = 0;
+// VL53L1X range_status as the Pololu library reports it (VL53L1X::RangeStatus): 0 RangeValid is the only
+// "distance valid". Everything else (1 sigma, 2 signal, 3 min range clipped, 4 out of bounds, 5 HW fail,
+// 6 no wrap check, 7 wrap, 255 none ...) is treated as invalid on purpose: this sensor guards a stair edge.
+// (R1 used the VL53L4CD here, which Turkish shops do not stock; the VL53L1X in short mode covers 4–130 cm.)
+constexpr uint8_t TOF_STATUS_VALID = 0;
 
 class CliffChannel {
  public:
@@ -28,7 +29,7 @@ class CliffChannel {
 };
 
 // Picks the next dead floor sensor to re-initialise: at most one attempt per interval, only while
-// the motors are off (the driver's init blocks for ~25 ms), and at most max_tries per sensor.
+// the motors are off (init and calibration block for ~25 ms), and at most max_tries per sensor.
 class CliffRetry {
  public:
   CliffRetry(uint32_t interval_ms, uint8_t max_tries) : interval_ms_(interval_ms), max_tries_(max_tries) {}

@@ -8,5 +8,4 @@
 #define T_DOCK_SENSE "/luna/mcu/dock_sense"
 #define T_BATTERY "/luna/mcu/battery"
 #define T_WHEEL_TARGET "/luna/mcu/wheel_target"
-#define T_HEAD_US "/luna/mcu/head_us"
 #define T_CHARGE_ENABLE "/luna/mcu/charge_enable"

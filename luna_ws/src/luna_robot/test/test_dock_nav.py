@@ -51,7 +51,7 @@ class Geometry(unittest.TestCase):
         self.assertIsNone(wall_normal_yaw([(0.4, 0.0), (0.4, 0.1)]))
 
     def test_front_points_from_a_turned_laser(self):
-        # R08: the C1's +x points to the robot's right (yaw −90°); straight ahead is then laser angle +90°.
+        # The C1's +x points to the robot's right (yaw −90°); straight ahead is then laser angle +90°.
         inc = 2 * math.pi / 8
         ranges = [1.0] * 8
         ranges[6] = 0.5                                              # -pi + 6 * pi/4 = +pi/2 in the laser frame

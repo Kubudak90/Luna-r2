@@ -3,19 +3,20 @@
   room   the SLAM / dock room of core/sim2d.default_room (tall cabinet, pillar, dock)
   toy    a 0.20 × 0.15 × 0.08 m toy box on the straight path
   table  a 1.0 × 0.5 m coffee table, top Z0.40–0.45, four Ø0.04 legs: the robot fits between the legs, its head not
-         under the top
+         under the top (R2 is 0.56 m tall)
   chair  a chair, seat Z0.42–0.45, four Ø0.025 legs, back Z0.45–0.90 on one side (the only part in the scan plane)
   dock   `room` plus small low objects on the way to the dock (same scan as `room`: its saved map still fits)
   door   a wall across the room, its 0.70 m doorway blocked by a 0.30 m ottoman: the only way to the goal is blocked
-  door70, door75, door80   the same wall with an open doorway 0.70 / 0.75 / 0.80 m wide: which doors the planner's
-         turning margin (nav2.yaml, global footprint_padding) still lets through (0.70 m: none)
-Everything except the walls, the dock's back plate and the chair back is below the LiDAR plane (Z0.59)."""
+  door60, door70, door80   the same wall with an open doorway 0.60 / 0.70 / 0.80 m wide: the round R2 turns inside its
+         own outline, so the planner needs no turning margin: 0.70 and 0.80 pass (R1's tracks: not 0.70), 0.60 is
+         marginal (open on paper, closed when the wall ends come out one cell thick in the map)
+Everything except the walls and the chair back is below the LiDAR plane (Z0.55)."""
 import math
 
 from .dock_nav import Pose2D
-from .sim2d import Block, Cylinder, Room, box, default_room, dock_body
+from .sim2d import DOCK_MAST, Block, Cylinder, Room, box, default_room, dock_parts
 
-DOCK = Pose2D(3.0, 1.75, math.pi / 2)      # north wall, as in the default room
+DOCK = Pose2D(3.0, 2.0 - DOCK_MAST[1], math.pi / 2)      # north wall, mast against it, as in the default room
 
 
 def _open_room(*extra_walls):
@@ -40,15 +41,15 @@ def chair(name, cx, cy, size=0.45, seat=(0.42, 0.45), back_top=0.90, leg_r=0.012
 
 
 def toy_room():
-    return Room(_open_room(), DOCK, (dock_body(DOCK), Block('toy_box', 1.40, -0.075, 1.60, 0.075, 0.0, 0.08)))
+    return Room(_open_room(), DOCK, dock_parts(DOCK) + (Block('toy_box', 1.40, -0.075, 1.60, 0.075, 0.0, 0.08),))
 
 
 def table_room():
-    return Room(_open_room(), DOCK, (dock_body(DOCK),) + table('table', 1.80, 0.0, 0.5, 1.0, 0.40, 0.45, 0.02, 0.03))
+    return Room(_open_room(), DOCK, dock_parts(DOCK) + table('table', 1.80, 0.0, 0.5, 1.0, 0.40, 0.45, 0.02, 0.03))
 
 
 def chair_room():
-    return Room(_open_room(), DOCK, (dock_body(DOCK),) + chair('chair', 1.80, 0.0))
+    return Room(_open_room(), DOCK, dock_parts(DOCK) + chair('chair', 1.80, 0.0))
 
 
 def dock_room():
@@ -65,15 +66,15 @@ def _door_wall(width):
 
 def door_room():
     return Room(_open_room(*_door_wall(0.70)), DOCK,
-                (dock_body(DOCK), Block('ottoman', 1.75, -0.40, 2.25, 0.40, 0.0, 0.30)))
+                dock_parts(DOCK) + (Block('ottoman', 1.75, -0.40, 2.25, 0.40, 0.0, 0.30),))
 
 
 def doorway_room(width):
-    return Room(_open_room(*_door_wall(width)), DOCK, (dock_body(DOCK),))
+    return Room(_open_room(*_door_wall(width)), DOCK, dock_parts(DOCK))
 
 
 WORLDS = {'room': default_room, 'toy': toy_room, 'table': table_room, 'chair': chair_room, 'dock': dock_room,
-          'door': door_room, 'door70': lambda: doorway_room(0.70), 'door75': lambda: doorway_room(0.75),
+          'door': door_room, 'door60': lambda: doorway_room(0.60), 'door70': lambda: doorway_room(0.70),
           'door80': lambda: doorway_room(0.80)}
 
 

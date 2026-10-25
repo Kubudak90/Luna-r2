@@ -48,8 +48,8 @@ EXPLORE = Pose2D(2.3, 1.35, 0.0)
 GOAL = Pose2D(3.5, 0.0, 0.0)
 COURSES = {'toy': (GOAL, 'reach', 180), 'table': (GOAL, 'reach', 180), 'chair': (GOAL, 'reach', 180),
            'door': (GOAL, 'refuse', 300), 'dock': (None, 'dock', 240),
-           # open doorways: 0.70 m is closed to the planner by its turning margin (nav2.yaml global footprint_padding)
-           'door70': (GOAL, 'refuse', 180), 'door75': (GOAL, 'reach', 180), 'door80': (GOAL, 'reach', 180)}
+           # open doorways: the round R2 needs no turning margin; 0.60 m is marginal on the 0.05 m map grid
+           'door60': (GOAL, 'reach', 180), 'door70': (GOAL, 'reach', 180), 'door80': (GOAL, 'reach', 180)}
 
 
 def yaw_of(q):
@@ -243,7 +243,7 @@ class Check(Node):
         handle = sent.result()
         self.check('exploration goal accepted', handle is not None and handle.accepted)
         result = handle.get_result_async()
-        # E-stop mid-drive: Nav2 keeps commanding, base_node's gate must stop the tracks on its own.
+        # E-stop mid-drive: Nav2 keeps commanding, base_node's gate must stop the wheels on its own.
         self.wait(lambda: self.speed > 0.15, 60, 'driving at > 0.15 m/s')
         self.log(f'E-stop pressed at {self.speed:.2f} m/s')
         self.pub_estop.publish(Bool(data=True))
@@ -258,7 +258,7 @@ class Check(Node):
         commands = self.cmd_vel_count - count0
         self.pub_estop.publish(Bool(data=False))
         self.log('E-stop released')
-        # Standstill includes the track motors' modelled lag (tau 0.15 s: 0.15 → 0.01 m/s takes ~0.4 s).
+        # Standstill includes the wheel motors' modelled lag (tau 0.15 s: 0.15 → 0.01 m/s takes ~0.4 s).
         self.check('E-stop stops the robot while Nav2 still commands',
                    gated and stopped and stop_s <= 1.0 and moved < 0.01 and commands > 20,
                    f'wheel target 0 after {gate_s:.2f} s, standstill after {stop_s:.2f} s, '

@@ -9,7 +9,7 @@
 #include "debounce.h"
 #include "dock_id.h"
 #include "drive.h"
-#include "jbd_bms.h"
+#include "daly_bms.h"
 
 using namespace luna;
 
@@ -23,228 +23,197 @@ static int g_checks = 0, g_fail = 0;
 
 using Bytes = std::vector<uint8_t>;
 
-static Bytes frame(uint8_t status, const Bytes &data, uint8_t reg = JBD_REG_BASIC) {
-  Bytes body = {status, (uint8_t)data.size()};
-  body.insert(body.end(), data.begin(), data.end());
-  const uint16_t chk = jbd_checksum(body.data(), body.size());
-  Bytes f = {JBD_START, reg};
-  f.insert(f.end(), body.begin(), body.end());
-  f.push_back((uint8_t)(chk >> 8)); f.push_back((uint8_t)chk); f.push_back(JBD_END);
+// A BMS reply frame: A5 01 cmd 08 data[8] chk.
+static Bytes reply(uint8_t cmd, const Bytes &data, uint8_t addr = DALY_BMS) {
+  Bytes f = {DALY_START, addr, cmd, DALY_LEN};
+  for (size_t i = 0; i < 8; i++) f.push_back(i < data.size() ? data[i] : 0);
+  f.push_back(daly_checksum(f.data(), 12));
   return f;
 }
 
-static void put16(Bytes &d, size_t at, uint16_t v) { d[at] = (uint8_t)(v >> 8); d[at + 1] = (uint8_t)v; }
+static Bytes be16(uint16_t v) { return {(uint8_t)(v >> 8), (uint8_t)v}; }
 
-// Luna pack: 4S3P 26650, here 15.12 V, -2.35 A, 9.80 of 15.00 Ah, 3 NTCs.
-static Bytes luna_data(int16_t centiamps = -235, uint16_t protection = 0) {
-  Bytes d(23 + 6, 0);
-  put16(d, 0, 1512); put16(d, 2, (uint16_t)centiamps); put16(d, 4, 980); put16(d, 6, 1500);
-  put16(d, 8, 12); put16(d, 16, protection);
-  d[18] = 0x10; d[19] = 65; d[20] = 0x03; d[21] = 4; d[22] = 3;
-  put16(d, 23, 2731 + 253); put16(d, 25, 2731 + 268); put16(d, 27, 2731 - 50);   // 25.3, 26.8, -5.0 °C
-  return d;
+static Bytes cat(std::initializer_list<Bytes> parts) {
+  Bytes out;
+  for (const Bytes &p : parts) out.insert(out.end(), p.begin(), p.end());
+  return out;
 }
 
-static int feed_all(JbdParser &p, const Bytes &b) {
-  int frames = 0;
-  for (uint8_t x : b) frames += p.feed(x) != JbdFrame::None ? 1 : 0;
-  return frames;
+// Luna pack: 4S2P LiFePO4 32700, here 13.2 V, discharging 2.3 A (raw 30023), SoC 64.5 %.
+static Bytes luna_soc(uint16_t raw_current = 30023) { return cat({be16(132), be16(0), be16(raw_current), be16(645)}); }
+
+static int feed_all(DalyParser &p, const Bytes &bytes, DalyFrame want = DalyFrame::None) {
+  int n = 0;
+  for (uint8_t b : bytes) {
+    const DalyFrame f = p.feed(b);
+    if (f != DalyFrame::None && (want == DalyFrame::None || f == want)) ++n;
+  }
+  return n;
 }
 
 static void test_request_bytes() {
-  uint8_t req[7];
-  CHECK(jbd_build_read_request(JBD_REG_BASIC, req) == 7);
-  const uint8_t want[7] = {0xDD, 0xA5, 0x03, 0x00, 0xFF, 0xFD, 0x77};
-  for (int i = 0; i < 7; i++) CHECK(req[i] == want[i]);
-  jbd_build_read_request(JBD_REG_CELLS, req);
-  const uint8_t cells[7] = {0xDD, 0xA5, 0x04, 0x00, 0xFF, 0xFC, 0x77};
-  for (int i = 0; i < 7; i++) CHECK(req[i] == cells[i]);
+  uint8_t req[DALY_FRAME];
+  CHECK(daly_build_request(DALY_SOC, req) == 13);
+  const uint8_t want[13] = {0xA5, 0x40, 0x90, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0x7D};   // documented 0x90 request
+  bool same = true;
+  for (int i = 0; i < 13; i++) same = same && req[i] == want[i];
+  CHECK(same);
+  daly_build_request(DALY_CELLS, req);
+  CHECK(req[2] == 0x95 && req[12] == 0x82);
+  daly_build_request(DALY_ALARMS, req);
+  CHECK(req[12] == 0x85);
 }
 
-static Bytes cell_data(std::initializer_list<uint16_t> mv) {
-  Bytes d;
-  for (uint16_t v : mv) { d.push_back((uint8_t)(v >> 8)); d.push_back((uint8_t)v); }
-  return d;
+static void test_soc_frame() {
+  DalyParser p;
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc())) == 1);
+  CHECK_NEAR(p.soc().voltage_v, 13.2, 1e-4);
+  CHECK_NEAR(p.soc().current_a, -2.3, 1e-4);           // above the offset = discharging = negative
+  CHECK_NEAR(p.soc().soc_pct, 64.5, 1e-4);
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc(29600))) == 1);
+  CHECK_NEAR(p.soc().current_a, 40.0, 1e-4);           // 4 A charging
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc(30000))) == 1);
+  CHECK(p.soc().current_a == 0.0f);
+  CHECK(p.frames_ok() == 3 && p.frames_bad() == 0);
+}
+
+static void test_other_frames() {
+  DalyParser p;
+  CHECK(feed_all(p, reply(DALY_TEMPS, {66, 1, 63, 2})) == 1);           // 26 °C hottest (sensor 1), 23 °C
+  CHECK(p.temps().max_c == 26.0f && p.temps().min_c == 23.0f);
+  CHECK(feed_all(p, reply(DALY_TEMPS, {30, 1, 25, 1})) == 1);           // below zero
+  CHECK(p.temps().max_c == -10.0f && p.temps().min_c == -15.0f);
+  CHECK(feed_all(p, reply(DALY_MOSFET, {2, 1, 1, 7, 0x00, 0x00, 0x1E, 0x14})) == 1);   // 7700 mAh left
+  CHECK(p.mosfet().mode == 2 && p.mosfet().charge_fet && p.mosfet().discharge_fet);
+  CHECK_NEAR(p.mosfet().remaining_ah, 7.7, 1e-4);
+  CHECK(feed_all(p, reply(DALY_STATUS, {4, 1, 0, 1, 0, 0x01, 0x2C})) == 1);
+  CHECK(p.status().cells == 4 && p.status().ntc == 1 && !p.status().charger && p.status().load);
+  CHECK(p.status().cycles == 300);
+  CHECK(feed_all(p, reply(DALY_ALARMS, {0, 0x02, 0, 0, 0, 0, 0, 0})) == 1);
+  CHECK(p.alarms().bits[1] == 0x02);
 }
 
 static void test_cell_frames() {
-  JbdParser p;
-  JbdFrame got = JbdFrame::None;
-  for (uint8_t x : frame(0x00, cell_data({3780, 3781, 3779, 4210}), JBD_REG_CELLS)) {
-    const JbdFrame f = p.feed(x);
-    if (f != JbdFrame::None) got = f;
-  }
-  CHECK(got == JbdFrame::Cells);
+  DalyParser p;                                        // 4 cells by default: two frames
+  const Bytes f1 = reply(DALY_CELLS, cat({{1}, be16(3301), be16(3305), be16(3299)}));
+  const Bytes f2 = reply(DALY_CELLS, cat({{2}, be16(3310), be16(0), be16(0)}));
+  CHECK(feed_all(p, f1) == 0);                         // first frame alone completes nothing
+  CHECK(feed_all(p, f2) == 1);
   CHECK(p.cells().count == 4);
-  CHECK_NEAR(p.cells().v[0], 3.780, 1e-6);
-  CHECK_NEAR(p.cells().v[3], 4.210, 1e-6);
-  CHECK(p.info().voltage_v == 0);                              // basic info untouched
+  CHECK_NEAR(p.cells().v[0], 3.301, 1e-6);
+  CHECK_NEAR(p.cells().v[3], 3.310, 1e-6);
+  CHECK(feed_all(p, f2) == 0 && p.frames_bad() == 1);  // frame 2 without its frame 1
+  CHECK(feed_all(p, cat({f1, f2})) == 1);              // and a whole reply after it is fine again
 
-  JbdParser q;
-  Bytes odd = cell_data({3780, 3781}); odd.pop_back();
-  CHECK(feed_all(q, frame(0x00, odd, JBD_REG_CELLS)) == 0);
-  CHECK(feed_all(q, frame(0x00, Bytes(), JBD_REG_CELLS)) == 0);
-  CHECK(q.frames_bad() == 2);
-  Bytes all32(64, 0x0F);
-  CHECK(feed_all(q, frame(0x00, all32, JBD_REG_CELLS)) == 1);
-  CHECK(q.cells().count == 32);
-
-  BatteryMonitor m(3000);                                     // cells alone never make it present
-  m.on_cells(p.cells(), 0);
-  CHECK(!m.present(0) && m.fields(0).cell_count == 0);
-  JbdParser b;
-  CHECK(feed_all(b, frame(0x00, luna_data())) == 1);
-  m.on_frame(b.info(), 100);
-  CHECK(m.fields(100).cell_count == 4);
-  CHECK_NEAR(m.fields(100).cell_v[1], 3.781, 1e-6);
-  CHECK(m.fields(3001).present && m.fields(3001).cell_count == 0);   // cells stale, basic fresh
-  m.on_cells(p.cells(), 3001);
-  CHECK(m.fields(3001).cell_count == 4);
-  CHECK(m.fields(3101).cell_count == 0 && !m.fields(3101).present);  // basic stale → absent, no cells
-}
-
-// Independent vector (15S pack), checksum 0xFBFF verified by hand — guards against the frame()
-// helper and the parser sharing the same checksum mistake.
-static void test_reference_frame() {
-  const Bytes f = {0xDD, 0x03, 0x00, 0x1B, 0x17, 0x00, 0x00, 0x00, 0x02, 0xD0, 0x03, 0xE8, 0x00, 0x00,
-                   0x20, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x48, 0x03, 0x0F, 0x02, 0x0B,
-                   0x76, 0x0B, 0x82, 0xFB, 0xFF, 0x77};
-  JbdParser p;
-  CHECK(feed_all(p, f) == 1);
-  const JbdBasicInfo &i = p.info();
-  CHECK_NEAR(i.voltage_v, 58.88, 1e-4);
-  CHECK_NEAR(i.current_a, 0.0, 1e-6);
-  CHECK_NEAR(i.remaining_ah, 7.20, 1e-4);
-  CHECK_NEAR(i.nominal_ah, 10.00, 1e-4);
-  CHECK(i.rsoc_pct == 72 && i.cells == 15 && i.fet == 3 && i.ntc_count == 2);
-  CHECK_NEAR(i.ntc_c[0], 20.3, 1e-4);
-  CHECK_NEAR(i.ntc_c[1], 21.5, 1e-4);
-  const BatteryFields b = battery_fields_from(i);
-  CHECK(b.present);
-  CHECK_NEAR(b.percentage, 0.72, 1e-6);
-  CHECK_NEAR(b.temperature, 21.5, 1e-4);
-  CHECK(b.status == BATT_STATUS_NOT_CHARGING);
-  CHECK(b.health == BATT_HEALTH_GOOD);
-}
-
-static void test_luna_frame_fields() {
-  JbdParser p;
-  CHECK(feed_all(p, frame(0x00, luna_data())) == 1);
-  const BatteryFields b = battery_fields_from(p.info());
-  CHECK_NEAR(b.voltage, 15.12, 1e-4);
-  CHECK_NEAR(b.current, -2.35, 1e-4);
-  CHECK_NEAR(b.charge, 9.80, 1e-4);
-  CHECK_NEAR(b.capacity, 15.00, 1e-4);
-  CHECK_NEAR(b.design_capacity, 15.00, 1e-4);
-  CHECK_NEAR(b.percentage, 9.80 / 15.00, 1e-5);
-  CHECK_NEAR(b.temperature, 26.8, 1e-4);               // hottest NTC
-  CHECK_NEAR(p.info().ntc_c[2], -5.0, 1e-4);           // below 0 °C decodes signed
-  CHECK(b.status == BATT_STATUS_DISCHARGING);
-  CHECK(b.technology == BATT_TECH_LION);
-  CHECK(p.info().cycles == 12 && p.info().cells == 4);
-
-  JbdParser c;
-  CHECK(feed_all(c, frame(0x00, luna_data(150))) == 1);
-  CHECK(battery_fields_from(c.info()).status == BATT_STATUS_CHARGING);
+  DalyParser q;                                        // a 0x94 cell count wins over the default
+  feed_all(q, reply(DALY_STATUS, {3, 1}));
+  CHECK(feed_all(q, f1) == 1 && q.cells().count == 3);
+  DalyParser r;
+  feed_all(r, reply(DALY_STATUS, {200, 1}));           // nonsense count: capped
+  int done = 0;
+  for (uint8_t no = 1; no <= 6; no++) done += feed_all(r, reply(DALY_CELLS, cat({{no}, be16(3300), be16(3300), be16(3300)})));
+  CHECK(done == 1 && r.cells().count == DALY_MAX_CELLS);
 }
 
 static void test_rejects_bad_frames() {
-  JbdParser p;
-  Bytes f = frame(0x00, luna_data());
-  Bytes bad_chk = f; bad_chk[bad_chk.size() - 2] ^= 0x01;
-  CHECK(feed_all(p, bad_chk) == 0);
-  CHECK(p.frames_ok() == 0 && p.frames_bad() == 1);
-
-  Bytes bad_end = f; bad_end.back() = 0x78;
-  CHECK(feed_all(p, bad_end) == 0);
-
-  Bytes bad_data = f; bad_data[6] ^= 0x10;               // payload flipped, checksum stale
-  CHECK(feed_all(p, bad_data) == 0);
-
-  CHECK(feed_all(p, frame(0x80, luna_data())) == 0);     // BMS error status
-
-  CHECK(feed_all(p, frame(0x00, luna_data(), 0x05)) == 0);   // register we do not request
-
-  Bytes short_ntc = luna_data(); short_ntc.resize(23 + 4); // claims 3 NTCs, carries 2
-  CHECK(feed_all(p, frame(0x00, short_ntc)) == 0);
-
-  CHECK(feed_all(p, frame(0x00, Bytes(20, 0))) == 0);    // shorter than the fixed part
-
-  Bytes too_long = {0xDD, 0x03, 0x00, (uint8_t)(JBD_MAX_DATA + 1)};
-  CHECK(feed_all(p, too_long) == 0);
-  CHECK(p.frames_ok() == 0);
-  CHECK(feed_all(p, f) == 1);                            // and it still recovers
+  DalyParser p;
+  Bytes bad = reply(DALY_SOC, luna_soc());
+  bad[12] ^= 0x01;                                     // checksum
+  CHECK(feed_all(p, bad) == 0);
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc(), DALY_HOST)) == 0);     // our own request echoed back
+  Bytes len = reply(DALY_SOC, luna_soc());
+  len[3] = 0x07; len[12] = daly_checksum(len.data(), 12);
+  CHECK(feed_all(p, len) == 0);
+  CHECK(feed_all(p, reply(0x91, {})) == 0);           // a command Luna does not poll
+  CHECK(p.frames_ok() == 0 && p.frames_bad() >= 4);
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc())) == 1);
 }
 
 static void test_resync() {
-  JbdParser p;
-  const Bytes f = frame(0x00, luna_data());
-  Bytes stream = {0x00, 0x77, 0xDD, 0x99, 0xDD, 0xDD};   // noise, including stray start bytes
-  stream.insert(stream.end(), f.begin(), f.end());
-  stream.insert(stream.end(), f.begin(), f.end());
-  CHECK(feed_all(p, stream) == 2);
-
-  // Truncated reply: with reset() before the next request the next frame is not lost.
-  JbdParser q;
-  CHECK(feed_all(q, Bytes(f.begin(), f.begin() + 12)) == 0);
-  q.reset();
-  CHECK(feed_all(q, f) == 1);
-
-  // Without reset() the truncated frame may eat the next one, but the parser recovers after it.
-  JbdParser r;
-  Bytes s(f.begin(), f.begin() + 12);
-  s.insert(s.end(), f.begin(), f.end());
-  s.insert(s.end(), f.begin(), f.end());
-  CHECK(feed_all(r, s) >= 1);
+  DalyParser p;
+  const Bytes good = reply(DALY_SOC, luna_soc());
+  CHECK(feed_all(p, cat({{0x00, 0x13, 0xA5, 0x77}, good})) == 1);    // noise, a stray start byte
+  Bytes cut(good.begin(), good.begin() + 7);
+  CHECK(feed_all(p, cat({cut, good})) == 1);           // a truncated reply does not hide the next one
+  Bytes corrupt = good;
+  corrupt[9] ^= 0xFF;
+  CHECK(feed_all(p, cat({corrupt, good, good})) == 2);
+  p.reset();
+  CHECK(feed_all(p, cat({cut})) == 0);
+  p.reset();                                           // main.cpp resets before each request
+  CHECK(feed_all(p, good) == 1);
 }
 
-static void test_longer_and_wider_frames() {
-  Bytes d = luna_data();
-  d.insert(d.end(), {0x00, 0x00, 0x05, 0xDC, 0x03, 0xD4});   // newer boards append fields
-  JbdParser p;
-  CHECK(feed_all(p, frame(0x00, d)) == 1);
-  CHECK_NEAR(p.info().voltage_v, 15.12, 1e-4);
-
-  Bytes many(23 + 2 * 10, 0);                                 // 10 NTCs: keep the first 8
-  many[22] = 10;
-  for (int i = 0; i < 10; i++) put16(many, 23 + 2 * i, (uint16_t)(2731 + 100 * i));
-  JbdParser q;
-  CHECK(feed_all(q, frame(0x00, many)) == 1);
-  CHECK(q.info().ntc_count == JBD_MAX_NTC);
-  CHECK_NEAR(battery_fields_from(q.info()).temperature, 70.0, 1e-4);
-
-  Bytes none = luna_data(); none[22] = 0; none.resize(23); // no NTC → unknown temperature
-  JbdParser r;
-  CHECK(feed_all(r, frame(0x00, none)) == 1);
-  CHECK(std::isnan(battery_fields_from(r.info()).temperature));
-}
-
-static void test_soc_and_health() {
-  JbdBasicInfo i;
-  i.nominal_ah = 0; i.rsoc_pct = 40;
-  CHECK_NEAR(battery_fields_from(i).percentage, 0.40, 1e-6);   // no nominal → BMS RSOC
-  i.rsoc_pct = 0xFF;
-  CHECK(std::isnan(battery_fields_from(i).percentage));
-  i.nominal_ah = 15; i.remaining_ah = 15.2f; i.current_a = 0.01f;
-  CHECK_NEAR(battery_fields_from(i).percentage, 1.0, 1e-6);    // clamped
-  CHECK(battery_fields_from(i).status == BATT_STATUS_FULL);
-
-  struct { uint16_t p; uint8_t h; } cases[] = {
-      {0, BATT_HEALTH_GOOD},
-      {JBD_P_CHG_OT, BATT_HEALTH_OVERHEAT}, {JBD_P_DSG_OT, BATT_HEALTH_OVERHEAT},
-      {JBD_P_CHG_UT, BATT_HEALTH_COLD}, {JBD_P_DSG_UT, BATT_HEALTH_COLD},
-      {JBD_P_CELL_OV, BATT_HEALTH_OVERVOLTAGE}, {JBD_P_PACK_OV, BATT_HEALTH_OVERVOLTAGE},
-      {JBD_P_CELL_UV, BATT_HEALTH_DEAD}, {JBD_P_PACK_UV, BATT_HEALTH_DEAD},
-      {JBD_P_SHORT, BATT_HEALTH_UNSPEC_FAILURE}, {JBD_P_DSG_OC, BATT_HEALTH_UNSPEC_FAILURE},
-      {JBD_P_AFE_ERROR, BATT_HEALTH_UNSPEC_FAILURE}, {JBD_P_SOFT_LOCK, BATT_HEALTH_UNSPEC_FAILURE},
-      {JBD_P_DSG_OT | JBD_P_CELL_OV, BATT_HEALTH_OVERHEAT},
-  };
-  for (const auto &c : cases) {
-    JbdParser p;
-    CHECK(feed_all(p, frame(0x00, luna_data(-235, c.p))) == 1);
-    CHECK(p.info().protection == c.p);
-    CHECK(battery_fields_from(p.info()).health == c.h);
+static void test_health() {
+  DalyAlarms a;
+  CHECK(daly_health(a) == BATT_HEALTH_GOOD);
+  a.bits[1] = DALY_A1_DSG_HOT_L1; a.bits[0] = DALY_A0_CELL_LOW_L1; a.bits[2] = DALY_A2_SOC_LOW_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_GOOD);            // warnings and SoC alarms: numbers, AGX decides
+  a = DalyAlarms(); a.bits[1] = DALY_A1_CHG_HOT_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_OVERHEAT);
+  a = DalyAlarms(); a.bits[4] = DALY_A4_DSG_FET_HOT;
+  CHECK(daly_health(a) == BATT_HEALTH_OVERHEAT);
+  a = DalyAlarms(); a.bits[1] = DALY_A1_CHG_COLD_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_COLD);
+  a = DalyAlarms(); a.bits[0] = DALY_A0_SUM_HIGH_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_OVERVOLTAGE);
+  a = DalyAlarms(); a.bits[0] = DALY_A0_CELL_LOW_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_DEAD);
+  a.bits[1] = DALY_A1_DSG_HOT_L2;
+  CHECK(daly_health(a) == BATT_HEALTH_OVERHEAT);        // heat first
+  for (int byte : {2, 3, 5, 6}) {
+    a = DalyAlarms(); a.bits[byte] = byte == 2 ? DALY_A2_DSG_OC_L2 : byte == 3 ? DALY_A3_DIFF_V_L2 : 0x04;
+    CHECK(daly_health(a) == BATT_HEALTH_UNSPEC_FAILURE);
   }
+  a = DalyAlarms(); a.bits[4] = 0x10;                  // charge FET stuck
+  CHECK(daly_health(a) == BATT_HEALTH_UNSPEC_FAILURE);
+  a = DalyAlarms(); a.bits[7] = 0x33;
+  CHECK(daly_health(a) == BATT_HEALTH_GOOD);
+}
+
+static void test_battery_monitor_fields() {
+  DalyParser p;
+  BatteryMonitor m(3000, 12.0f);
+  feed_all(p, reply(DALY_SOC, luna_soc()));
+  m.on_soc(p.soc(), 1000);
+  BatteryFields f = m.fields(1000);
+  CHECK(f.present && f.technology == BATT_TECH_LIFE);
+  CHECK_NEAR(f.voltage, 13.2, 1e-4);
+  CHECK_NEAR(f.percentage, 0.645, 1e-5);
+  CHECK(f.status == BATT_STATUS_DISCHARGING && f.health == BATT_HEALTH_UNKNOWN);
+  CHECK(std::isnan(f.charge) && std::isnan(f.temperature) && f.cell_count == 0);   // their replies not in yet
+  CHECK(f.capacity == 12.0f && f.design_capacity == 12.0f);
+
+  feed_all(p, reply(DALY_TEMPS, {72, 1, 64, 2}));
+  m.on_temps(p.temps(), 1100);
+  feed_all(p, reply(DALY_MOSFET, {2, 1, 1, 0, 0x00, 0x00, 0x1E, 0x14}));
+  m.on_mosfet(p.mosfet(), 1200);
+  feed_all(p, reply(DALY_ALARMS, {}));
+  m.on_alarms(p.alarms(), 1300);
+  feed_all(p, cat({reply(DALY_CELLS, cat({{1}, be16(3301), be16(3305), be16(3299)})),
+                   reply(DALY_CELLS, cat({{2}, be16(3310)}))}));
+  m.on_cells(p.cells(), 1400);
+  f = m.fields(1500);
+  CHECK(f.temperature == 32.0f && f.health == BATT_HEALTH_GOOD && f.cell_count == 4);
+  CHECK_NEAR(f.charge, 7.7, 1e-4);
+  CHECK_NEAR(f.cell_v[2], 3.299, 1e-6);
+
+  m.on_soc(p.soc(), 4000);                             // only 0x90 keeps arriving
+  f = m.fields(4100);
+  CHECK(f.present && f.temperature == 32.0f);          // temps from 1100 still fresh at 4100
+  f = m.fields(4401);
+  CHECK(f.present && std::isnan(f.temperature) && std::isnan(f.charge) && f.cell_count == 0);
+  CHECK(f.health == BATT_HEALTH_UNKNOWN);
+
+  feed_all(p, reply(DALY_SOC, cat({be16(146), be16(0), be16(30000), be16(1000)})));   // full, idle on the dock
+  m.on_soc(p.soc(), 5000);
+  CHECK(m.fields(5000).status == BATT_STATUS_FULL);
+  feed_all(p, reply(DALY_SOC, cat({be16(140), be16(0), be16(29960), be16(800)})));
+  m.on_soc(p.soc(), 5100);
+  CHECK(m.fields(5100).status == BATT_STATUS_CHARGING);
+  feed_all(p, reply(DALY_SOC, cat({be16(132), be16(0), be16(30000), be16(2000)})));   // SoC 200 %: nonsense
+  m.on_soc(p.soc(), 5200);
+  CHECK(std::isnan(m.fields(5200).percentage) && m.fields(5200).status == BATT_STATUS_NOT_CHARGING);
 }
 
 static void test_battery_monitor_fail_safe() {
@@ -254,18 +223,20 @@ static void test_battery_monitor_fail_safe() {
   CHECK(a.current == 0.0f);
   CHECK(std::isnan(a.percentage) && std::isnan(a.temperature));
 
-  BatteryMonitor m(3000);
+  BatteryMonitor m(3000, 12.0f);
   CHECK(!m.present(0) && !m.fields(0).present && m.fields(0).voltage == 0.0f);
-  JbdParser p;
-  CHECK(feed_all(p, frame(0x00, luna_data())) == 1);
-  m.on_frame(p.info(), 1000);
+  DalyParser p;
+  feed_all(p, reply(DALY_TEMPS, {66, 1, 63, 2}));
+  m.on_temps(p.temps(), 0);
+  CHECK(!m.present(0));                                // other replies never make it present
+  CHECK(feed_all(p, reply(DALY_SOC, luna_soc())) == 1);
+  m.on_soc(p.soc(), 1000);
   CHECK(m.present(1000) && m.fields(4000).present);
-  CHECK_NEAR(m.fields(4000).voltage, 15.12, 1e-4);
   CHECK(!m.fields(4001).present);
   CHECK(m.fields(4001).voltage == 0.0f);
 
-  BatteryMonitor w(3000);                       // millis() wrap-around
-  w.on_frame(p.info(), 0xFFFFFF00u);
+  BatteryMonitor w(3000, 12.0f);                       // millis() wrap-around
+  w.on_soc(p.soc(), 0xFFFFFF00u);
   CHECK(w.present(0x00000100u));
   CHECK(!w.present(0xFFFFFF00u + 3001u));
 }
@@ -424,18 +395,18 @@ static void test_drive_velocity_and_wrap() {
   CHECK(d.velocity_rad_s(0) == 0 && d.velocity_rad_s(1) == 0);   // first step has no delta
   c[0] += 65; c[1] -= 65;
   d.step(c, 0.01f, 10, false, false);
-  const double w = 65 * 6.283185307179586 / 6533.0 / 0.01;
+  const double w = 65 * 6.283185307179586 / 4480.0 / 0.01;
   CHECK_NEAR(d.velocity_rad_s(0), w, 1e-3);
   CHECK_NEAR(d.velocity_rad_s(1), -w, 1e-3);
-  CHECK_NEAR(d.position_rad(0), 1065 * 6.283185307179586 / 6533.0, 1e-5);
+  CHECK_NEAR(d.position_rad(0), 1065 * 6.283185307179586 / 4480.0, 1e-5);
 
   DriveController e;
   int32_t k[2] = {INT32_MAX - 10, INT32_MIN + 10};
   e.step(k, 0.01f, 0, false, false);
   k[0] = INT32_MIN + 10; k[1] = INT32_MAX - 10;         // +21 / -21 counts across the wrap
   e.step(k, 0.01f, 10, false, false);
-  CHECK_NEAR(e.velocity_rad_s(0), 21 * 6.283185307179586 / 6533.0 / 0.01, 1e-3);
-  CHECK_NEAR(e.velocity_rad_s(1), -21 * 6.283185307179586 / 6533.0 / 0.01, 1e-3);
+  CHECK_NEAR(e.velocity_rad_s(0), 21 * 6.283185307179586 / 4480.0 / 0.01, 1e-3);
+  CHECK_NEAR(e.velocity_rad_s(1), -21 * 6.283185307179586 / 4480.0 / 0.01, 1e-3);
 
   e.step(k, 0.0f, 20, false, false);                    // dt = 0 must not divide by zero
   CHECK(e.velocity_rad_s(0) == 0);
@@ -466,17 +437,17 @@ static void test_drive_integrator_bounds() {
   CHECK_NEAR(o.duty[0], 1 / cfg.ff_rad_s_at_full_duty + cfg.kp * 1 + 1 * cfg.ki * 0.01f, 1e-5);
 }
 
-// First-order track model: the loop must converge on the target without sign errors.
+// First-order wheel model: the loop must converge on the target without sign errors.
 static void test_drive_closed_loop() {
   DriveController d;
   double pos[2] = {0, 0}, vel[2] = {0, 0};
   const float target[2] = {5.0f, -3.0f};
-  const double tau = 0.15, dt = 0.01, k_rad_s_per_duty = 9.0;   // model 10 % off the feed-forward
+  const double tau = 0.15, dt = 0.01, k_rad_s_per_duty = 13.5;  // model 10 % off the feed-forward
   uint32_t t = 0;
   for (int n = 0; n < 300; n++, t += 10) {
     d.set_target(target[0], target[1], 0.714f, t);
-    const int32_t counts[2] = {(int32_t)std::lround(pos[0] * 6533 / 6.283185307179586),
-                               (int32_t)std::lround(pos[1] * 6533 / 6.283185307179586)};
+    const int32_t counts[2] = {(int32_t)std::lround(pos[0] * 4480 / 6.283185307179586),
+                               (int32_t)std::lround(pos[1] * 4480 / 6.283185307179586)};
     const DriveOutput o = d.step(counts, (float)dt, t, false, false);
     for (int i = 0; i < 2; i++) {
       vel[i] += (o.duty[i] * k_rad_s_per_duty - vel[i]) * dt / tau;
@@ -498,24 +469,19 @@ static void test_pwm_and_clamp() {
   CHECK(!p.reverse && p.level == 0);
   p = duty_to_pwm(-0.0f, 4095);
   CHECK(!p.reverse && p.level == 0);
-  CHECK(clamp_finite(2000, 1100, 1900, 1500) == 1900);
-  CHECK(clamp_finite(1000, 1100, 1900, 1500) == 1100);
-  CHECK(clamp_finite(1234, 1100, 1900, 1500) == 1234);
-  CHECK(clamp_finite(std::nanf(""), 1100, 1900, 1500) == 1500);
-  CHECK(clamp_finite(-INFINITY, 1100, 1900, 1600) == 1600);
 }
 
 int main() {
   struct { const char *name; void (*fn)(); } tests[] = {
-      {"jbd request bytes", test_request_bytes},
-      {"jbd reference frame", test_reference_frame},
-      {"jbd luna frame → BatteryState", test_luna_frame_fields},
-      {"jbd rejects bad frames", test_rejects_bad_frames},
-      {"jbd resync after noise/truncation", test_resync},
-      {"jbd longer frames, NTC count", test_longer_and_wider_frames},
-      {"jbd SoC and health flags", test_soc_and_health},
+      {"daly request bytes", test_request_bytes},
+      {"daly 0x90 voltage/current/SoC", test_soc_frame},
+      {"daly 0x92/0x93/0x94/0x98", test_other_frames},
+      {"daly 0x95 cell voltages", test_cell_frames},
+      {"daly rejects bad frames", test_rejects_bad_frames},
+      {"daly resync after noise/truncation", test_resync},
+      {"daly alarms → health", test_health},
+      {"battery monitor fields + freshness", test_battery_monitor_fields},
       {"battery monitor fail-safe + stale", test_battery_monitor_fail_safe},
-      {"jbd cell voltages (0x04)", test_cell_frames},
       {"dock sense debounce", test_dock_debounce},
       {"P4 dock ID window", test_p4_window},
       {"charge_enable lease", test_charge_enable},
@@ -525,7 +491,7 @@ int main() {
       {"drive velocity + encoder wrap", test_drive_velocity_and_wrap},
       {"drive integrator bounds", test_drive_integrator_bounds},
       {"drive closed loop converges", test_drive_closed_loop},
-      {"pwm mapping + clamp_finite", test_pwm_and_clamp},
+      {"pwm mapping", test_pwm_and_clamp},
   };
   for (const auto &t : tests) {
     const int before = g_fail;

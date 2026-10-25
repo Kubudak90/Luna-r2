@@ -1,30 +1,30 @@
-"""Simulated OAK-D Lite depth (passive stereo) for the 2.5D world: a low-resolution pinhole raycast against the
-floor, the walls and every obstacle, returned as points in the RGB camera's optical frame (z out of the lens, x right,
-y down), like the driver's depth-aligned /oak/points. numpy only; the pose comes from the urdf
-oak_rgb_camera_optical_frame (R08).
+"""Simulated Orbbec Gemini 336 depth (active stereo with an IR dot projector) for the 2.5D world: a low-resolution
+pinhole raycast against the floor, the walls and every obstacle, returned as points in the depth camera's optical
+frame (z out of the lens, x right, y down), like OrbbecSDK_ROS2's /camera/depth/points. numpy only; the pose comes
+from the urdf camera_depth_optical_frame.
 
-What it models: field of view, MinZ (no depth closer than that, along the optical axis), maximum range and stereo
-depth noise growing with z² (σz = k·z²; k from 0.15 px sub-pixel disparity, f ≈ 432 px at 640 px / 73°, 75 mm
-baseline). What it does not: textureless or shiny surfaces without a stereo match, glass, the IR-less sensor in
-the dark, motion blur, IMU-free tilt of the body when braking."""
+What it models: field of view (90° × 65°), the minimum depth, maximum range and stereo depth noise growing with z²
+(σz = k·z²; k from Orbbec's ≤ 0.8 % at 2 m). What it does not: glass and mirrors, very dark or shiny surfaces, the
+projector washed out by sunlight through a window, motion blur, the body pitching when braking. R1's passive OAK-D
+Lite also failed on plain walls and in the dark; the projector covers those, so they are not modelled either."""
 from dataclasses import dataclass
 
 import numpy as np
 
 from .sim2d import WALL_HEIGHT, Block
 
-FRAME = 'oak_rgb_camera_optical_frame'    # depthai_ros_driver aligns depth to the RGB camera
+FRAME = 'camera_depth_optical_frame'
 
 
 @dataclass(frozen=True)
 class DepthConfig:
     width: int = 64
-    height: int = 48
-    hfov_deg: float = 73.0
-    vfov_deg: float = 58.0
-    min_z_m: float = 0.35          # OAK-D Lite MinZ (≈ 0.20 m with extended disparity)
+    height: int = 46
+    hfov_deg: float = 90.0
+    vfov_deg: float = 65.0
+    min_z_m: float = 0.15          # Gemini 336: 0.10 m by the datasheet, best from 0.26 m; 0.15 m here
     max_z_m: float = 8.0
-    noise_k: float = 0.0046        # σz = k·z² (m⁻¹)
+    noise_k: float = 0.004         # σz = k·z² (m⁻¹)
     rate_hz: float = 5.0
 
 

@@ -1,8 +1,8 @@
-# slam_toolbox (Humble 2.6) for Luna's RPLIDAR C1: frame 'laser' on the mast, scan plane z 0.59 m, yaw −90° (R08:
-# the C1's +x points to the robot's right; TF turns the scan, urdf/luna.urdf laser_joint), 0.05–12 m, 10 Hz,
+# slam_toolbox (Humble 2.6) for Luna's RPLIDAR C1: frame 'laser' on top of the head, scan plane z 0.55 m, yaw −90°
+# (the C1's +x points to the robot's right; TF turns the scan, urdf/luna.urdf laser_joint), 0.05–12 m, 10 Hz,
 # ~500 samples per turn. Mapping mode (online, async).
 # slam_localization.yaml is loaded on top of this file for a saved map (launch/slam.launch.py).
-# The scan plane only sees walls and tall furniture: chairs' seats, tables and toys below 0.59 m are not mapped.
+# The scan plane only sees walls and tall furniture: chairs' seats, tables and toys below 0.55 m are not mapped.
 slam_toolbox:
   ros__parameters:
     solver_plugin: solver_plugins::CeresSolver
@@ -12,7 +12,7 @@ slam_toolbox:
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
 
-    odom_frame: odom                 # base_node: odom → base_footprint from track odometry
+    odom_frame: odom                 # base_node: odom → base_footprint from wheel odometry + gyro
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan
@@ -36,7 +36,7 @@ slam_toolbox:
     stack_size_to_use: 40000000      # serializing large maps needs a big stack
     enable_interactive_mode: false
 
-    # Track odometry slips when turning (turn_slip still to be calibrated), so scan matching does the real work.
+    # Wheel odometry with the gyro heading slips little, but scan matching still does the real work.
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_travel_distance: 0.2

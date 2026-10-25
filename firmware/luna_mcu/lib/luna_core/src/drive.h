@@ -1,4 +1,4 @@
-// Track speed loop (feed-forward + PI) and duty → PWM mapping. Plain C++, host-tested.
+// Wheel speed loop (feed-forward + PI) and duty → PWM mapping. Plain C++, host-tested.
 // Stops (enable=false, duty 0, integrators cleared) on E-stop, driver fault, no command for
 // cmd_timeout_ms, a zero/invalid pwm_cap, or non-finite targets.
 #pragma once
@@ -7,9 +7,9 @@
 namespace luna {
 
 struct DriveConfig {
-  float counts_per_rev = 6533.0f;      // Pololu 4755 at the output shaft
-  float kp = 0.08f, ki = 0.6f, max_i = 0.5f;   // CALIBRATE on the real tracks
-  float ff_rad_s_at_full_duty = 10.0f; // ~10 rad/s at full 12 V duty; CALIBRATE
+  float counts_per_rev = 4480.0f;      // Pololu 37D 70:1 (#4754): 64 CPR × 70 at the output shaft
+  float kp = 0.08f, ki = 0.6f, max_i = 0.5f;   // CALIBRATE on the real wheels
+  float ff_rad_s_at_full_duty = 15.0f; // 150 rpm = 15.7 rad/s no-load at 12 V, less a little under load; CALIBRATE
   uint32_t cmd_timeout_ms = 300;
   float max_integ_dt_s = 0.05f;        // a late tick must not kick the integrator
 };
@@ -44,7 +44,5 @@ struct PwmCommand {
 };
 PwmCommand duty_to_pwm(float duty, uint16_t full_scale);   // non-finite → 0
 
-// Clamp, but replace NaN/inf with `fallback` (e.g. keep the previous servo pulse).
-float clamp_finite(float v, float lo, float hi, float fallback);
 
 }  // namespace luna

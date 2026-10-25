@@ -1,7 +1,7 @@
-"""Simulated OAK-D Lite for the 2.5D world (depth:=sim): renders the sim2d room (same `world`) from the true robot
-pose on /luna/sim/truth and publishes the points on /oak/points in oak_rgb_camera_optical_frame, stamped with the
-truth sample's time so TF places them where the robot's own estimate was then. Only for the simulator: the robot stack
-still never reads the truth itself. Model and its limits: core/depth_camera.py."""
+"""Simulated Gemini 336 depth for the 2.5D world (depth:=sim): renders the sim2d room (same `world`) from the true
+robot pose on /luna/sim/truth and publishes the points on /camera/depth/points in camera_depth_optical_frame, stamped
+with the truth sample's time so TF places them where the robot's own estimate was then. Only for the simulator: the
+robot stack still never reads the truth itself. Model and its limits: core/depth_camera.py."""
 import numpy as np
 from nav_msgs.msg import Odometry
 from rclpy.node import Node

@@ -1,14 +1,12 @@
-// Luna MCU firmware (Teensy 4.1 + micro-ROS, Humble). Logic lives in lib/luna_core (host-tested).
-// Safety layers: hardware E-stop cuts driver SLP and servo EN; this firmware also stops on
+// Luna R2 MCU firmware (Teensy 4.1 + micro-ROS, Humble). Logic lives in lib/luna_core (host-tested).
+// Safety layers: hardware E-stop cuts the motor driver's SLP; this firmware also stops on
 // E-stop sense, on fault pins, when no wheel target arrives for 300 ms and while the micro-ROS
 // agent is unreachable; a 0.5 s hardware watchdog resets the MCU if the control loop hangs.
 // DOCK_INHIBIT follows /luna/mcu/charge_enable; charging is allowed unless the AGX keeps asking otherwise.
 #include <Arduino.h>
-#include <Servo.h>
 #include <Wire.h>
 #include <QuadEncoder.h>
 #include <VL53L1X.h>
-#include <vl53l4cd_class.h>
 #include <micro_ros_platformio.h>
 #include <rcl/rcl.h>
 #include <rclc/rclc.h>
@@ -24,39 +22,36 @@
 #include "debounce.h"
 #include "dock_id.h"
 #include "drive.h"
-#include "jbd_bms.h"
+#include "daly_bms.h"
 
 static_assert((int)luna::BATT_STATUS_CHARGING == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING, "BatteryState constants");
 static_assert((int)luna::BATT_STATUS_FULL == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_FULL, "BatteryState constants");
 static_assert((int)luna::BATT_HEALTH_COLD == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_COLD, "BatteryState constants");
-static_assert((int)luna::BATT_TECH_LION == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_TECHNOLOGY_LION, "BatteryState constants");
+static_assert((int)luna::BATT_TECH_LIFE == (int)sensor_msgs__msg__BatteryState__POWER_SUPPLY_TECHNOLOGY_LIFE, "BatteryState constants");
 
 static QuadEncoder enc1(1, ENC1_A, ENC1_B), enc2(2, ENC2_A, ENC2_B);
-static Servo pan, tilt;
 static VL53L1X corner[4];
-// Floor sensors: stm32duino driver uses 8-bit addresses (0x52 = 7-bit 0x29).
-static VL53L4CD cliff_tof[4] = {VL53L4CD(&Wire1, XSHUT_CLIFF[0]), VL53L4CD(&Wire1, XSHUT_CLIFF[1]),
-                                VL53L4CD(&Wire1, XSHUT_CLIFF[2]), VL53L4CD(&Wire1, XSHUT_CLIFF[3])};
-constexpr uint8_t CLIFF_ADDR8[4] = {0x80, 0x82, 0x84, 0x86};   // 7-bit 0x40..0x43
-constexpr uint32_t CLIFF_STALE_MS = 100, BMS_STALE_MS = 3000, BMS_POLL_MS = 250;
+static VL53L1X cliff_tof[4];                    // floor sensors on Wire1
+constexpr uint8_t CLIFF_ADDR[4] = {0x40, 0x41, 0x42, 0x43};
+constexpr uint32_t CLIFF_STALE_MS = 100, BMS_STALE_MS = 3000, BMS_POLL_MS = 125;
+constexpr float PACK_DESIGN_AH = 12.0f;         // 4S2P LiFePO4 32700, 2 × 6 Ah
 constexpr uint32_t PING_MS = 500, TIME_SYNC_MS = 60000;
 constexpr uint32_t CHARGE_LEASE_MS = 1000;      // a charge_enable=false expires after this (dock_node: 20 Hz)
 static luna::CliffChannel cliff_ch[4] = {luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS),
                                          luna::CliffChannel(CLIFF_STALE_MS), luna::CliffChannel(CLIFF_STALE_MS)};
 static luna::CliffRetry cliff_retry(2000, 5);
-static luna::JbdParser bms_parser;
-static luna::BatteryMonitor bms(BMS_STALE_MS);
+static luna::DalyParser bms_parser;
+static luna::BatteryMonitor bms(BMS_STALE_MS, PACK_DESIGN_AH);
 static luna::DriveController ctl;
 static luna::ThresholdDebounce dock_sense(luna::P4_SCORE_ON, luna::P4_SCORE_OFF, 100);   // P4 ID window, 100 ms hold
 static luna::ChargeEnable charge_enable(CHARGE_LEASE_MS);   // DOCK_INHIBIT request (Elektrik R01 README §5, Faz 2)
-static float head_us[2] = {1500, 1500};
 static bool motors_enabled = false;
 static uint32_t publish_errors = 0, last_sync_ms = 0;
 
 rcl_publisher_t p_wheels, p_bump, p_cliff, p_corner, p_estop, p_sense, p_batt;
-rcl_subscription_t s_target, s_head, s_charge;
-std_msgs__msg__Float32MultiArray m_wheels, m_cliff, m_corner, m_target, m_head;
-static float b_wheels[4], b_cliff[4], b_corner[4], b_target[3], b_head[2], b_cells[luna::JBD_MAX_CELLS];
+rcl_subscription_t s_target, s_charge;
+std_msgs__msg__Float32MultiArray m_wheels, m_cliff, m_corner, m_target;
+static float b_wheels[4], b_cliff[4], b_corner[4], b_target[3], b_cells[luna::DALY_MAX_CELLS];
 std_msgs__msg__UInt8 m_bump;
 std_msgs__msg__Bool m_estop, m_sense, m_charge;
 sensor_msgs__msg__BatteryState m_batt;
@@ -105,11 +100,10 @@ static void stop_all() {
   motors_enabled = false;
 }
 
-// No agent: motors off, charging allowed, servo EN follows the E-stop, watchdog fed from loop().
+// No agent: motors off, charging allowed, watchdog fed from loop().
 static void hold_safe() {
   stop_all();
   charge_enable.reset(); digitalWrite(DOCK_INHIBIT, LOW);
-  digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
   watchdog_feed();
 }
 
@@ -117,13 +111,6 @@ static void on_target(const void *msg) {
   const auto *m = (const std_msgs__msg__Float32MultiArray *)msg;
   if (m->data.size < 3) return;
   ctl.set_target(m->data.data[0], m->data.data[1], m->data.data[2], millis());   // NaN → stop
-}
-
-static void on_head(const void *msg) {
-  const auto *m = (const std_msgs__msg__Float32MultiArray *)msg;
-  if (m->data.size < 2) return;
-  head_us[0] = luna::clamp_finite(m->data.data[0], 1100.0f, 1900.0f, head_us[0]);   // ±60° mechanical window
-  head_us[1] = luna::clamp_finite(m->data.data[1], 1420.0f, 1580.0f, head_us[1]);   // ±12°
 }
 
 static void on_charge(const void *msg) {
@@ -149,31 +136,35 @@ static void control_100hz() {
   motors_enabled = true;
 }
 
-// The driver's I2C read retries a NACK forever, so probe first and drop a sensor that vanished.
+// Probe first: a sensor that dropped off the bus would otherwise read as "data ready" (a NACKed register reads 0).
 static bool cliff_probe(int i) {
-  Wire1.beginTransmission(CLIFF_ADDR8[i] >> 1);
+  Wire1.beginTransmission(CLIFF_ADDR[i]);
   return Wire1.endTransmission() == 0;
 }
 
 static bool cliff_start(int i) {               // sensor i must be the only one that can sit at 0x29
-  cliff_tof[i] = VL53L4CD(&Wire1, XSHUT_CLIFF[i]);   // forget the old address: InitSensor skips
-                                                     // re-addressing when it thinks it is already done
-  return cliff_tof[i].InitSensor(CLIFF_ADDR8[i]) == VL53L4CD_ERROR_NONE &&
-         cliff_tof[i].VL53L4CD_SetRangeTiming(20, 0) == VL53L4CD_ERROR_NONE &&
-         cliff_tof[i].VL53L4CD_StartRanging() == VL53L4CD_ERROR_NONE;
+  digitalWrite(XSHUT_CLIFF[i], LOW); delay(2);
+  digitalWrite(XSHUT_CLIFF[i], HIGH); delay(2);  // VL53L1X boots in ~1.2 ms, at 0x29
+  VL53L1X &t = cliff_tof[i];
+  t = VL53L1X();                                // forget the old address
+  t.setBus(&Wire1);
+  t.setTimeout(50);
+  if (!t.init()) return false;
+  t.setAddress(CLIFF_ADDR[i]);
+  // Floor 60 mm below the window: short mode (to 1.3 m, least disturbed by sunlight), 20 ms budget, 50 Hz.
+  if (!t.setDistanceMode(VL53L1X::Short) || !t.setMeasurementTimingBudget(20000)) return false;
+  t.startContinuous(20);
+  return t.last_status == 0;
 }
 
 static void poll_cliff(int i) {
   if (!cliff_ch[i].alive()) return;
-  uint8_t ready = 0;
-  if (!cliff_probe(i) || cliff_tof[i].VL53L4CD_CheckForDataReady(&ready) != VL53L4CD_ERROR_NONE) {
-    cliff_ch[i].set_alive(false);              // 0.0 (= cliff) until a re-init succeeds
-    return;
-  }
-  if (!ready) return;
-  VL53L4CD_Result_t r;
-  cliff_tof[i].VL53L4CD_ClearInterrupt();
-  if (cliff_tof[i].VL53L4CD_GetResult(&r) == VL53L4CD_ERROR_NONE) cliff_ch[i].on_sample(r.range_status, r.distance_mm, millis());
+  VL53L1X &t = cliff_tof[i];
+  if (!cliff_probe(i)) { cliff_ch[i].set_alive(false); return; }   // 0.0 (= cliff) until a re-init succeeds
+  if (!t.dataReady()) return;
+  const uint16_t mm = t.read(false);
+  if (t.last_status != 0) { cliff_ch[i].set_alive(false); return; }
+  cliff_ch[i].on_sample((uint8_t)t.ranging_data.range_status, mm, millis());
 }
 
 static void retry_dead_cliff() {
@@ -181,25 +172,37 @@ static void retry_dead_cliff() {
   for (int k = 0; k < 4; k++) dead[k] = !cliff_ch[k].alive();
   const int i = cliff_retry.next(dead, !motors_enabled, millis());
   if (i < 0) return;
-  for (int k = 0; k < 4; k++) if (dead[k]) digitalWrite(XSHUT_CLIFF[k], LOW);
-  watchdog_feed();                             // InitSensor blocks for ~25 ms
+  for (int k = 0; k < 4; k++) if (dead[k]) digitalWrite(XSHUT_CLIFF[k], LOW);   // the others back off 0x29
+  watchdog_feed();                             // init blocks for ~25 ms
   cliff_ch[i].set_alive(cliff_start(i));
 }
 
+// One request every BMS_POLL_MS: 0x90 (voltage, current, SoC) every other slot → 4 Hz; the other five in turn,
+// each every 1.25 s. A 0x95 reply for 4 cells is two frames, 27 ms at 9600 baud: done before the next request.
 static void poll_bms() {
   static uint32_t last_req = 0;
-  static bool cells_next = false;
+  static uint8_t slot = 0;
+  static const uint8_t others[5] = {luna::DALY_CELLS, luna::DALY_TEMPS, luna::DALY_MOSFET, luna::DALY_ALARMS,
+                                    luna::DALY_STATUS};
   while (Serial1.available()) {
-    const luna::JbdFrame f = bms_parser.feed((uint8_t)Serial1.read());
-    if (f == luna::JbdFrame::Basic) bms.on_frame(bms_parser.info(), millis());
-    else if (f == luna::JbdFrame::Cells) bms.on_cells(bms_parser.cells(), millis());
+    const uint32_t now = millis();
+    switch (bms_parser.feed((uint8_t)Serial1.read())) {
+      case luna::DalyFrame::Soc: bms.on_soc(bms_parser.soc(), now); break;
+      case luna::DalyFrame::Temps: bms.on_temps(bms_parser.temps(), now); break;
+      case luna::DalyFrame::Mosfet: bms.on_mosfet(bms_parser.mosfet(), now); break;
+      case luna::DalyFrame::Cells: bms.on_cells(bms_parser.cells(), now); break;
+      case luna::DalyFrame::Alarms: bms.on_alarms(bms_parser.alarms(), now); break;
+      case luna::DalyFrame::Status:              // only tells the parser how many cells a 0x95 reply has
+      case luna::DalyFrame::None: break;
+    }
   }
-  if (millis() - last_req >= BMS_POLL_MS) {   // 0x03 and 0x04 alternate → each at 2 Hz
+  if (millis() - last_req >= BMS_POLL_MS) {
     last_req = millis();
-    uint8_t req[7];
+    const uint8_t cmd = slot % 2 == 0 ? luna::DALY_SOC : others[slot / 2];
+    slot = (uint8_t)((slot + 1) % 10);
+    uint8_t req[luna::DALY_FRAME];
     bms_parser.reset();                          // a half frame must not swallow the next reply
-    Serial1.write(req, luna::jbd_build_read_request(cells_next ? luna::JBD_REG_CELLS : luna::JBD_REG_BASIC, req));
-    cells_next = !cells_next;
+    Serial1.write(req, luna::daly_build_request(cmd, req));
   }
 }
 
@@ -211,7 +214,7 @@ static void fill_battery() {
   m_batt.power_supply_status = f.status; m_batt.power_supply_health = f.health;
   m_batt.power_supply_technology = f.technology; m_batt.present = f.present;
   for (uint8_t i = 0; i < f.cell_count; i++) b_cells[i] = f.cell_v[i];
-  m_batt.cell_voltage.data = b_cells; m_batt.cell_voltage.capacity = luna::JBD_MAX_CELLS;
+  m_batt.cell_voltage.data = b_cells; m_batt.cell_voltage.capacity = luna::DALY_MAX_CELLS;
   m_batt.cell_voltage.size = f.cell_count;
   if (rmw_uros_epoch_synchronized()) {
     const int64_t ns = rmw_uros_epoch_nanos();
@@ -230,9 +233,6 @@ static void timer_cb(rcl_timer_t *, int64_t) {
   const bool inhibit = charge_enable.inhibit(millis());
   digitalWrite(DOCK_INHIBIT, inhibit ? HIGH : LOW);
   dock_sense.update(luna::p4_score(analogRead(DOCK_ID_ADC) * (3.3f / 1023.0f), inhibit), millis());
-  pan.writeMicroseconds((int)head_us[0]);
-  tilt.writeMicroseconds((int)head_us[1]);
-  digitalWrite(SERVO_EN, estop_pressed() ? LOW : HIGH);
   static uint8_t div = 0;
   if (++div % 2) return;                         // publish at 50 Hz
   b_wheels[0] = ctl.position_rad(0); b_wheels[1] = ctl.position_rad(1);
@@ -260,7 +260,7 @@ static void sync_time() {
 
 static bool create_entities() {
   p_wheels = p_bump = p_cliff = p_corner = p_estop = p_sense = p_batt = rcl_get_zero_initialized_publisher();
-  s_target = s_head = s_charge = rcl_get_zero_initialized_subscription();
+  s_target = s_charge = rcl_get_zero_initialized_subscription();
   t_fast = rcl_get_zero_initialized_timer();
   node = rcl_get_zero_initialized_node();
   exec = rclc_executor_get_zero_initialized_executor();
@@ -276,13 +276,11 @@ static bool create_entities() {
   TRY(rclc_publisher_init_default(&p_sense, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_DOCK_SENSE));
   TRY(rclc_publisher_init_default(&p_batt, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), T_BATTERY));
   TRY(rclc_subscription_init_default(&s_target, &node, F, T_WHEEL_TARGET));
-  TRY(rclc_subscription_init_default(&s_head, &node, F, T_HEAD_US));
   TRY(rclc_subscription_init_default(&s_charge, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), T_CHARGE_ENABLE));
   TRY(rclc_timer_init_default(&t_fast, &support, RCL_MS_TO_NS(10), timer_cb));
-  TRY(rclc_executor_init(&exec, &support.context, 4, &alloc));
+  TRY(rclc_executor_init(&exec, &support.context, 3, &alloc));
   TRY(rclc_executor_add_timer(&exec, &t_fast));
   TRY(rclc_executor_add_subscription(&exec, &s_target, &m_target, &on_target, ON_NEW_DATA));
-  TRY(rclc_executor_add_subscription(&exec, &s_head, &m_head, &on_head, ON_NEW_DATA));
   TRY(rclc_executor_add_subscription(&exec, &s_charge, &m_charge, &on_charge, ON_NEW_DATA));
   sync_time();
   return true;
@@ -294,7 +292,6 @@ static void destroy_entities() {
   for (rcl_publisher_t *p : {&p_wheels, &p_bump, &p_cliff, &p_corner, &p_estop, &p_sense, &p_batt})
     ignore(rcl_publisher_fini(p, &node));
   ignore(rcl_subscription_fini(&s_target, &node));
-  ignore(rcl_subscription_fini(&s_head, &node));
   ignore(rcl_subscription_fini(&s_charge, &node));
   ignore(rcl_timer_fini(&t_fast));
   ignore(rclc_executor_fini(&exec));
@@ -313,26 +310,26 @@ static void init_tof() {
 }
 
 static void init_cliff() {
-  for (auto &s : cliff_tof) s.begin();           // all XSHUT low
+  for (int i = 0; i < 4; i++) { pinMode(XSHUT_CLIFF[i], OUTPUT); digitalWrite(XSHUT_CLIFF[i], LOW); }
   Wire1.begin(); Wire1.setClock(400000);
-  for (int i = 0; i < 4; i++) cliff_ch[i].set_alive(cliff_start(i));   // InitSensor raises XSHUT i
+  delay(10);
+  for (int i = 0; i < 4; i++) cliff_ch[i].set_alive(cliff_start(i));   // one at a time off 0x29
 }
 
 void setup() {
-  for (int p : {M1_DIR, M2_DIR, DRV_SLP, SERVO_EN, DOCK_INHIBIT}) pinMode(p, OUTPUT);
+  for (int p : {M1_DIR, M2_DIR, DRV_SLP, DOCK_INHIBIT}) pinMode(p, OUTPUT);
   digitalWrite(DOCK_INHIBIT, LOW);                // charging allowed (also the hardware default: 100k pull-down)
   for (int p : {ESTOP_SENSE, BUMP_FL, BUMP_FR, BUMP_BL, BUMP_BR, M1_FLT, M2_FLT}) pinMode(p, INPUT_PULLUP);
   analogWriteResolution(12);
   analogWriteFrequency(M1_PWM, 20000); analogWriteFrequency(M2_PWM, 20000);
   stop_all();
   enc1.setInitConfig(); enc1.init(); enc2.setInitConfig(); enc2.init();
-  pan.attach(SERVO_PAN, 500, 2500); tilt.attach(SERVO_TILT, 500, 2500);
   Wire.begin(); Wire.setClock(400000); init_tof(); init_cliff();
-  Serial1.begin(9600);                            // JBD default UART speed
+  Serial1.begin(9600);                            // Daly UART speed
 
   sensor_msgs__msg__BatteryState__init(&m_batt);   // allocates the empty strings micro-ROS serialises
   bind(m_wheels, b_wheels, 4); bind(m_cliff, b_cliff, 4); bind(m_corner, b_corner, 4);
-  bind(m_target, b_target, 3); bind(m_head, b_head, 2);
+  bind(m_target, b_target, 3);
   Serial.begin(115200);
   set_microros_serial_transports(Serial);
   watchdog_start();

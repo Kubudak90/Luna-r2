@@ -1,7 +1,8 @@
 """Speaker output for assistant replies, with the text-to-speech engine left pluggable.
 
-The speaker (40 mm 4 Ω, front grille) hangs on the XVF3800's amplified speaker output, so audio is played to the
-array's ALSA card: that playback is also what its echo canceller hears as reference.
+The speaker (50 mm 4 Ω 3 W in a closed box behind the torso grille, PAM8403 amplifier) hangs on the ReSpeaker Mic
+Array v2.0's 3.5 mm output, so audio is played to the array's ALSA card: that playback is also what its echo
+canceller hears as reference. With the privacy slider closed the array has no power, so Luna stays silent too.
 
 Engines: NullTts (no voice, waits about as long as speaking would take, so listening/speaking states stay real),
 CommandTts (any command line, e.g. espeak-ng, optionally piped into aplay) and HttpWavTts (Piper's HTTP server:

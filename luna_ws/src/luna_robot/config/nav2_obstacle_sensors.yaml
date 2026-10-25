@@ -1,9 +1,9 @@
 # Overlay on config/nav2.yaml for obstacle_sensors:=all (launch/nav2.launch.py loads it after nav2.yaml, so the keys
-# here win). Adds what sits below the LiDAR plane (laser frame, 0.59 m): coffee tables, chair seats, toys.
-#   depth camera  OAK-D Lite, /oak/points (depthai_ros_driver or sim_depth_node) → voxel_layer, collision_monitor
+# here win). Adds what sits below the LiDAR plane (laser frame, 0.55 m): coffee tables, chair seats, toys.
+#   depth camera  Gemini 336, /camera/depth/points (OrbbecSDK_ROS2 or sim_depth_node) → voxel_layer, collision_monitor
 #   corner ToF    4 × VL53L1X (tof_range_node): arcs /luna/tof/*/points → tof_layer, Range /luna/tof/* → collision_monitor
-# Heights are in the costmap frame (floor = 0): 0.03 m keeps the noisy floor out, 0.62 m is just above the robot's
-# top (RPLIDAR C1, 0.601 m in R08), so a table top it cannot pass under counts and a shelf above it does not.
+# Heights are in the costmap frame (floor = 0): 0.03 m keeps the noisy floor out, 0.58 m is just above the robot's
+# top (RPLIDAR C1 on the head, 0.561 m), so a table top it cannot pass under counts and a shelf above it does not.
 # The voxel layer clears in 3D: a ray that passes over a low box to the floor behind it does not erase the box.
 # Its clearing source keeps the floor points (min -0.10 m); the marking source does not.
 # The ToF go to a plain ObstacleLayer as point arcs, not to RangeSensorLayer: Humble's RangeSensorLayer queues every
@@ -29,16 +29,16 @@ local_costmap:
         combination_method: 1
         observation_sources: depth_mark depth_clear
         depth_mark:
-          topic: /oak/points
+          topic: /camera/depth/points
           data_type: PointCloud2
           marking: true
           clearing: false
           min_obstacle_height: 0.03
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 2.0          # 1° of body pitch lifts the floor 3.5 cm at 2 m (not modelled in the sim)
           obstacle_min_range: 0.0
         depth_clear:
-          topic: /oak/points
+          topic: /camera/depth/points
           data_type: PointCloud2
           marking: false
           clearing: true
@@ -58,7 +58,7 @@ local_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69         # a 0.70 m (max_range) arc means nothing nearer: it only clears
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -69,7 +69,7 @@ local_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -80,7 +80,7 @@ local_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -91,7 +91,7 @@ local_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -114,16 +114,16 @@ global_costmap:
         combination_method: 1
         observation_sources: depth_mark depth_clear
         depth_mark:
-          topic: /oak/points
+          topic: /camera/depth/points
           data_type: PointCloud2
           marking: true
           clearing: false
           min_obstacle_height: 0.03
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 2.0          # 1° of body pitch lifts the floor 3.5 cm at 2 m (not modelled in the sim)
           obstacle_min_range: 0.0
         depth_clear:
-          topic: /oak/points
+          topic: /camera/depth/points
           data_type: PointCloud2
           marking: false
           clearing: true
@@ -143,7 +143,7 @@ global_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69         # a 0.70 m (max_range) arc means nothing nearer: it only clears
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -154,7 +154,7 @@ global_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -165,7 +165,7 @@ global_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -176,7 +176,7 @@ global_costmap:
           marking: true
           clearing: true
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.62
+          max_obstacle_height: 0.58
           obstacle_max_range: 0.69
           obstacle_min_range: 0.0
           raytrace_max_range: 0.75
@@ -186,9 +186,9 @@ collision_monitor:
     observation_sources: [scan, depth, tof_fl, tof_fr, tof_bl, tof_br]
     depth:
       type: pointcloud
-      topic: /oak/points
+      topic: /camera/depth/points
       min_height: 0.03
-      max_height: 0.62
+      max_height: 0.58
     tof_fl:
       type: range
       topic: /luna/tof/fl

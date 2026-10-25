@@ -6,7 +6,7 @@ package_name = 'luna_robot'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='0.2.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -16,6 +16,7 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml') + glob('config/*.xml')),
         ('share/' + package_name + '/config/camera_info', glob('config/camera_info/*.yaml')),
         ('share/' + package_name + '/behavior_trees', glob('behavior_trees/*.xml')),
+        ('share/' + package_name + '/web', glob('web/*.js') + glob('web/*.html')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -26,7 +27,6 @@ setup(
     entry_points={
         'console_scripts': [
             'base_node = luna_robot.base_node:main',
-            'head_node = luna_robot.head_node:main',
             'dock_node = luna_robot.dock_node:main',
             'face_bridge_node = luna_robot.face_bridge_node:main',
             'mock_mcu_node = luna_robot.mock_mcu_node:main',
@@ -42,6 +42,7 @@ setup(
             'assistant_node = luna_robot.assistant_node:main',
             'speech_node = luna_robot.speech_node:main',
             'stt_node = luna_robot.stt_node:main',
+            'face_track_node = luna_robot.face_track_node:main',
         ],
     },
 )

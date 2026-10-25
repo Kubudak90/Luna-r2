@@ -1,9 +1,9 @@
-"""Docking state machine for the front-centre recessed receiver and the wall-backed dock.
+"""Docking state machine for the R2 dock: a low base plate with a wheel funnel and wheel stops, spring pins that meet
+copper strips under the robot, and a tag mast 0.45 m ahead of the seat (docs/TASARIM_R2.md, "Dock").
 
-The robot drives forward into the dock: receiver mouth Y−170, dock nose face Y−187/−154.
-Guidance is an AprilTag on the wall marker plate (REF_R02_TAG, centre ≈ 382 mm high) seen by the
-head cameras, plus the DOCK_SENSE contact (P4) for confirmation. Pure logic: the ROS node feeds
-observations and applies the returned twist through the safety gate."""
+The robot drives forward onto the dock. Guidance is the AprilTag on the mast seen by the Gemini 336 colour camera
+(core/dock_tag.py), plus the DOCK_SENSE contact (P4) for confirmation. Pure logic: the ROS node feeds observations and
+applies the returned twist through the safety gate."""
 from dataclasses import dataclass, field
 
 
@@ -13,7 +13,7 @@ class DockConfig:
     align_tol: float = 0.06           # normalised horizontal tag offset
     approach_speed: float = 0.06      # m/s
     creep_speed: float = 0.025        # m/s in the last 60 mm
-    creep_distance: float = 0.06      # m of tag-to-mouth distance where creeping starts
+    creep_distance: float = 0.06      # m before the seat where creeping starts
     k_turn: float = 1.2               # rad/s per unit tag offset
     seek_timeout: float = 40.0
     approach_timeout: float = 25.0
@@ -30,7 +30,7 @@ class DockConfig:
 class Obs:
     tag_visible: bool = False
     tag_offset: float = 0.0           # -1 (left) .. 1 (right) in the image
-    tag_distance: float = 9.9         # m, mouth-to-nose estimate
+    tag_distance: float = 9.9         # m still to drive to the seat
     dock_sense: bool = False
     charging: bool = False
     front_bumper: bool = False

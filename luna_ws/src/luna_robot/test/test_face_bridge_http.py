@@ -19,8 +19,8 @@ for mod, names in [('geometry_msgs.msg', ['Vector3']), ('std_msgs.msg', ['Bool',
     for n in names:
         setattr(sys.modules[mod], n, type(n, (), {}))
 
-from luna_robot.core.face_mood import MoodMapper  # noqa: E402
-from luna_robot.face_bridge_node import Hub, make_handler  # noqa: E402
+from luna_robot.core.face_mood import FACE_EVENTS, MoodMapper  # noqa: E402
+from luna_robot.face_bridge_node import STATIC, Hub, make_handler  # noqa: E402
 
 
 def free_port():
@@ -145,6 +145,44 @@ class FaceBridgeHttp(unittest.TestCase):
             self.assertEqual(e.exception.code, 404)
         finally:
             server.shutdown()
+
+
+WEB = os.path.join(os.path.dirname(__file__), '..', 'web')
+
+
+class FacePage(unittest.TestCase):
+    def test_serves_the_face_and_its_modules_only(self):
+        hub, port = Hub(), free_port()
+        server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, '*', static_dir=WEB))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            for path, kind, needle in (('/', 'text/html', b"import { startFace } from './face.js'"),
+                                       ('/face.js', 'text/javascript', b"from './face-core.js'"),
+                                       ('/face-core.js', 'text/javascript', b'export function createFaceCore'),
+                                       ('/robot-link.js', 'text/javascript', b"from './face-core.js'")):
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=3) as resp:
+                    self.assertTrue(resp.headers['Content-Type'].startswith(kind), path)
+                    self.assertIn(needle, resp.read(), path)
+            for path in ('/package.json', '/face-core.test.mjs', '/../setup.py', '/web/face.js'):
+                with self.assertRaises(urllib.error.HTTPError, msg=path) as e:
+                    urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=3)
+                self.assertEqual(e.exception.code, 404)
+        finally:
+            server.shutdown()
+
+    def test_every_module_the_page_imports_is_served(self):
+        import re
+        served = {name for name, _ in STATIC.values()}
+        for name in served:
+            with open(os.path.join(WEB, name)) as f:
+                for dep in re.findall(r"from '\./([\w.-]+)'", f.read()):
+                    self.assertIn(dep, served, f'{name} imports {dep}')
+
+    def test_face_page_knows_exactly_the_events_face_mood_sends(self):
+        import re
+        with open(os.path.join(WEB, 'face-core.js')) as f:
+            block = re.search(r'FACE_EVENTS = Object\.freeze\(\[(.*?)\]\)', f.read(), re.S).group(1)
+        self.assertEqual(set(re.findall(r"'([\w-]+)'", block)), FACE_EVENTS)
 
 
 if __name__ == '__main__':

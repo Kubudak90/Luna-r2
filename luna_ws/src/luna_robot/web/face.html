@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="tr" data-link="connecting">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Luna</title>
+<style>
+  /* The head's AMOLED: black is "off", so the page is black in every theme and only the face glows. */
+  :root { --off: #000; --link: rgba(196, 230, 255, .28); color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: var(--off); overflow: hidden; }
+  body { cursor: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  /* A small dim dot while the face bridge is not connected: the face still runs, but hears nothing from the robot. */
+  .link { position: fixed; right: 2.2vmin; bottom: 2.2vmin; width: 1.3vmin; height: 1.3vmin; border-radius: 50%;
+          background: var(--link); opacity: 0; pointer-events: none; }
+  html:not([data-link="connected"]) .link { animation: link-lost 1s 4s forwards; }   /* only after 4 s without it */
+  @keyframes link-lost { to { opacity: 1; } }
+</style>
+</head>
+<body>
+<canvas id="face" tabindex="0" aria-label="Luna'nın yüzü. Dokun ya da basılı tut: Luna dinler. Parmağını gezdir: okşa."></canvas>
+<span class="link" aria-hidden="true"></span>
+<script type="module">
+  import { startFace } from './face.js';
+  const canvas = document.getElementById('face');
+  startFace(canvas);
+  canvas.focus();
+</script>
+</body>
+</html>

@@ -1,23 +1,27 @@
-# Run from "Yazılım R01 2026-10-16":  docker compose -f docker/compose.yaml up --build
+# Run on the Orin NX from the repository root:  docker compose -f docker/compose.yaml up --build
+# Before the first run: Orbbec udev rules on the host (OrbbecSDK_ROS2 scripts/install_udev_rules.sh) and the models
+# in /opt/luna/models (README_TR.md, "Ses zinciri" and "Yüz kamerası").
 services:
   luna:
     build: { context: .., dockerfile: docker/Dockerfile }
     runtime: nvidia
-    network_mode: host          # face bridge on 127.0.0.1:8765 for the kiosk browser
-    shm_size: 512mb             # camera images go through Fast DDS shared memory (config/fastdds_large_images.xml)
+    network_mode: host          # face bridge on 127.0.0.1:8765 for the kiosk browser on the head (tools/kiosk.sh)
+    ipc: host                   # Fast DDS shared memory for the camera images
+    shm_size: 512mb
     restart: unless-stopped
     devices:
       - /dev/ttyACM0:/dev/ttyACM0   # Teensy 4.1 (micro-ROS)
       - /dev/ttyUSB0:/dev/ttyUSB0   # RPLIDAR C1 USB adapter
-      - /dev/video0:/dev/video0     # head camera left  (config/cameras.yaml; use /dev/v4l/by-path names once wired)
-      - /dev/video2:/dev/video2     # head camera right
-      - /dev/snd:/dev/snd           # XVF3800 microphones + speaker (ALSA)
-      - /dev/bus/usb:/dev/bus/usb   # XVF3800 control interface (DoA) via pyusb
+      - /dev/snd:/dev/snd           # ReSpeaker Mic Array v2.0 microphones + speaker (ALSA)
     volumes:
-      - /opt/luna/models:/models:ro # whisper ggml model + Piper Turkish voice (README "Ses zinciri"; not in the image)
+      - /dev/bus/usb:/dev/bus/usb   # Gemini 336 (libusb) and the ReSpeaker control interface (pyusb); hot-plug safe
+      - /tmp/argus_socket:/tmp/argus_socket   # nvargus-daemon on the host: the CSI face camera (Pi Camera v2)
+      - /opt/luna/models:/models:ro # whisper ggml model, Piper Turkish voice, YuNet face model; not in the image
+    device_cgroup_rules:
+      - 'c 189:* rmw'               # USB devices that appear after the start (Gemini, ReSpeaker after the privacy slider)
     environment:
       - KIMI_API_KEY                # Kimi Code membership key, passed through from the host shell; never write it here
-    command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true   # tags:=usb is the default here
+    command: ros2 launch luna_robot luna.launch.py mock:=false lidar:=true   # depth:=gemini, tags:=gemini, face on
   luna-mock:
     build: { context: .., dockerfile: docker/Dockerfile }
     network_mode: host

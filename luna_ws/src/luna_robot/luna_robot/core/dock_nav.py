@@ -1,9 +1,10 @@
 """Go-to-dock coordinator: Nav2 drives to a saved pre-dock pose in front of the dock, then dock_node takes over.
 
 The dock pose is the robot's position (map frame) while docked plus the dock axis; it is learned when a docking run
-reaches CHARGING. The receiver funnel accepts a skewed robot, so the axis comes from the wall behind the dock (a line
-fitted to the LiDAR points ahead), not from the robot's heading. The pre-dock pose lies `standoff_m` straight back
-along that axis: the head camera sees the tag from there and dock_node's tag approach (0.6 m at 0.06 m/s ≈ 10 s)
+reaches CHARGING. The wheel funnel accepts a skewed robot, so the axis comes from the wall behind the dock (a line
+fitted to the LiDAR points ahead; the tag mast stands against it), not from the robot's heading. The pre-dock pose lies
+`standoff_m` straight back along that axis: the colour camera sees the tag from there and dock_node's tag approach
+(0.6 m at 0.06 m/s ≈ 10 s)
 stays well inside its 25 s approach timeout.
 Velocity ownership: Nav2 drives (via /cmd_vel) only in NAVIGATE, dock_node (via /luna/dock/cmd_vel) only after the
 hand-over. Both still pass base_node's safety gate.
@@ -49,7 +50,7 @@ def dock_frame(pose, dock):
 def front_points(ranges, angle_min, increment, laser_x, max_range, half_angle, laser_yaw=0.0, laser_y=0.0):
     """LaserScan ranges → (x, y) points in the base frame within ±half_angle of straight ahead and max_range.
     The laser frame is the base frame shifted by (laser_x, laser_y) and turned by laser_yaw (urdf laser_joint; the
-    R08 C1 mount has yaw −90°: its +x points to the robot's right)."""
+    C1 mount has yaw −90°: its +x points to the robot's right)."""
     pts = []
     for i, r in enumerate(ranges):
         a = laser_yaw + angle_min + i * increment                 # beam direction in the base frame
@@ -106,14 +107,14 @@ NEEDS_DOCK = {'seek_dock', 'critical'}                                 # battery
 @dataclass(frozen=True)
 class DockNavConfig:
     standoff_m: float = 0.6           # pre-dock pose: this far straight back from the docked pose
-    # dock_node steers at the dock point, so it arrives skewed by ≈ lateral / distance: hand over only inside a cone
-    # around the axis. In the 2D sim it docked from ≤ 0.11 m beside the axis at 0.6 m and failed from 0.13 m.
+    # dock_node steers at the tag, 0.45 m beyond the seat, so a robot starting beside the axis arrives at the seat with
+    # ≈ 0.43 of that offset: hand over only inside a cone around the axis (the wheel funnel takes ±0.045 m).
     handover_entry: float = 0.13      # rad, cone half angle (0.078 m at 0.6 m)
     handover_lateral_m: float = 0.10  # cone cap
     handover_lateral_min_m: float = 0.02
     handover_slack_m: float = 0.15    # accepted this much further back than standoff_m
-    handover_yaw: float = 0.3         # rad; dock_node's ALIGN turns the rest, the tag must stay in the ±35° view
-    backup_m: float = 0.4             # after a dock FAULT: reverse out of the dock face before re-planning
+    handover_yaw: float = 0.3         # rad; dock_node's ALIGN turns the rest, the tag must stay in the ±40° view
+    backup_m: float = 0.4             # after a dock FAULT: reverse off the dock plate before re-planning
     backup_timeout_s: float = 30.0
     nav_timeout_s: float = 240.0
     retry_delay_s: float = 2.0

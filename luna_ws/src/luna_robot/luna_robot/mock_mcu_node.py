@@ -1,6 +1,6 @@
 """Mock Teensy: lets the whole stack run with no hardware. Same topics as the real micro-ROS firmware.
 
-Simulates (core/mock_plant.py): wheel motion (first-order lag), a dock 1.2 m ahead of the start pose with
+Simulates (core/mock_plant.py): wheel motion (first-order lag), the R2 dock 1.2 m ahead of the start pose with
 a visible tag, dock contact + charging (off while /luna/mcu/charge_enable is false; the real MCU also drops
 a false after 1 s, the mock keeps the last value) and battery drain/charge.
 
@@ -17,6 +17,7 @@ from std_msgs.msg import Bool, Float32MultiArray, UInt8
 from . import topics as T
 from .entry import run
 from .core.mock_plant import DockPlant, PlantConfig
+from .core.robot_model import load_frames
 
 
 class MockMcu(Node):
@@ -24,7 +25,7 @@ class MockMcu(Node):
         super().__init__('luna_mock_mcu')
         self.declare_parameter('start_soc', 0.6)
         self.declare_parameter('dock_distance_m', 1.2)
-        self.declare_parameter('drain_w', 44.0)        # Donanım ve Güç R01, normal mode
+        self.declare_parameter('drain_w', PlantConfig.drain_w)
         self.declare_parameter('start_y_m', 0.0)
         self.declare_parameter('start_yaw_deg', 0.0)
         self.declare_parameter('publish_tag', True)
@@ -34,7 +35,6 @@ class MockMcu(Node):
                                            start_y_m=p('start_y_m').value, start_yaw_deg=p('start_yaw_deg').value))
         self.publish_tag = p('publish_tag').value
         self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
-        self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
         self.create_subscription(Bool, T.MCU_CHARGE_ENABLE, lambda m: setattr(self.plant, 'charge_enable', m.data), 10)
         self.p_wheels = self.create_publisher(Float32MultiArray, T.MCU_WHEELS, 10)
         self.p_bump = self.create_publisher(UInt8, T.MCU_BUMPERS, 10)
@@ -45,6 +45,7 @@ class MockMcu(Node):
         self.p_batt = self.create_publisher(BatteryState, T.MCU_BATTERY, 10)
         self.p_tag = self.create_publisher(PointStamped, T.DOCK_TAG, 10)
         self.p_truth = self.create_publisher(PoseStamped, T.MOCK_TRUTH, 10)
+        self.floor_m = load_frames().origin('tof_down_fl')[2]       # flat floor under the cliff sensors
         self.dt = 0.02
         self.create_timer(self.dt, self._tick)
 
@@ -57,12 +58,12 @@ class MockMcu(Node):
         s.step(self.dt)
         self.p_wheels.publish(Float32MultiArray(data=[*s.pos, *s.vel]))
         self.p_bump.publish(UInt8(data=0))
-        self.p_cliff.publish(Float32MultiArray(data=[0.055] * 4))
-        self.p_corner.publish(Float32MultiArray(data=[max(0.0, s.dist), 2.0, 2.0, 2.0]))
+        self.p_cliff.publish(Float32MultiArray(data=[self.floor_m] * 4))
+        self.p_corner.publish(Float32MultiArray(data=[2.0, 2.0, 2.0, 2.0]))   # the dock plate is under the cones
         self.p_estop.publish(Bool(data=False))
         self.p_sense.publish(Bool(data=s.docked))
         b = BatteryState()
-        b.voltage = 12.0 + 4.8 * s.soc
+        b.voltage = 12.4 + 1.0 * s.soc + (0.8 if s.charging else 0.0)   # LiFePO4 4S: flat, the BMS gives the SoC
         b.percentage = s.soc
         b.current = 3.0 if s.charging else -3.0
         b.temperature = 28.0
@@ -74,7 +75,7 @@ class MockMcu(Node):
         truth.pose.orientation.z, truth.pose.orientation.w = math.sin(s.yaw / 2), math.cos(s.yaw / 2)
         self.p_truth.publish(truth)
         tag = s.tag() if self.publish_tag else None
-        if tag:                                       # tag inside the head camera's view
+        if tag:                                       # tag inside the colour camera's view
             t = PointStamped()
             t.header.stamp = self.get_clock().now().to_msg()
             t.point.x, t.point.z = tag

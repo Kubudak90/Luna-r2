@@ -1,4 +1,4 @@
-"""Simulated OAK-D Lite (core/depth_camera.py). Needs numpy (in the ROS image; skipped on a bare Mac Python).
+"""Simulated Gemini 336 depth (core/depth_camera.py). Needs numpy (in the ROS image; skipped on a bare Mac Python).
 Run from luna_ws/src/luna_robot:  python3 -m pytest test"""
 import math
 import os
@@ -36,10 +36,10 @@ class DepthCamera(unittest.TestCase):
 
     def test_rays_cover_the_field_of_view_with_unit_depth(self):
         rays = pixel_rays(self.cfg)
-        self.assertEqual(rays.shape, (64 * 48, 3))
+        self.assertEqual(rays.shape, (64 * 46, 3))
         self.assertTrue(np.all(rays[:, 2] == 1.0))
-        self.assertAlmostEqual(math.degrees(2 * math.atan(rays[:, 0].max())), 73.0 * 63 / 64, delta=1.0)
-        self.assertAlmostEqual(math.degrees(2 * math.atan(rays[:, 1].max())), 58.0 * 47 / 48, delta=1.0)
+        self.assertAlmostEqual(math.degrees(2 * math.atan(rays[:, 0].max())), 90.0 * 63 / 64, delta=1.0)
+        self.assertAlmostEqual(math.degrees(2 * math.atan(rays[:, 1].max())), 65.0 * 45 / 46, delta=1.0)
 
     def test_depth_along_hits_floor_wall_and_block(self):
         room = Room(box(-1.0, -1.0, 3.0, 1.0), FAR_DOCK, (Block('b', 1.0, -0.1, 1.2, 0.1, 0.0, 0.2),))
@@ -53,7 +53,7 @@ class DepthCamera(unittest.TestCase):
     def test_empty_room_is_floor_and_walls_beyond_min_z(self):
         room = Room(box(-1.0, -3.0, 6.0, 3.0), FAR_DOCK)
         pts = render(Pose2D(0.0, 0.0, 0.0), room, self.frames, self.cfg)
-        self.assertGreater(len(pts), 0.9 * 64 * 48)
+        self.assertGreater(len(pts), 0.9 * 64 * 46)
         self.assertGreaterEqual(pts[:, 2].min(), self.cfg.min_z_m)
         base = to_base(pts)
         low = base[base[:, 2] < 0.03]
@@ -63,7 +63,7 @@ class DepthCamera(unittest.TestCase):
         self.assertGreater(len(floor), len(pts) / 2)
         nearest = floor[:, 0].min()
         cx, _, cz = load_frames().origin(FRAME)
-        self.assertAlmostEqual(nearest, cx + cz / math.tan(math.radians(15 + 29)), delta=0.03)  # blind zone
+        self.assertAlmostEqual(nearest, cx + cz / math.tan(math.radians(15 + 32.5)), delta=0.03)  # blind zone
 
     def test_low_toy_box_rises_out_of_the_floor(self):
         toy = Block('toy', 1.0, -0.075, 1.2, 0.075, 0.0, 0.08)
@@ -79,7 +79,7 @@ class DepthCamera(unittest.TestCase):
         base = to_base(render(Pose2D(0.0, 0.0, 0.0), room, self.frames, self.cfg))
         hits = base[(base[:, 2] >= 0.40 - 1e-6) & (base[:, 2] <= 0.45 + 1e-6) & (base[:, 0] < 1.71)]
         self.assertGreater(len(hits), 3)
-        self.assertLessEqual(hits[:, 2].max(), 0.62)          # within the costmap's obstacle band
+        self.assertLessEqual(hits[:, 2].max(), 0.58)          # within the costmap's obstacle band
 
     def test_noise_grows_with_depth(self):
         room = Room(box(-1.0, -3.0, 6.0, 3.0), FAR_DOCK)

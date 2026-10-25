@@ -1,6 +1,7 @@
 """2.5D simulator: replaces mock_mcu_node with a room, furniture, a LiDAR and the dock on a wall (core/sim2d.py,
 rooms in core/sim_worlds.py, parameter `world`), so SLAM, Nav2, docking and obstacle courses run with no hardware.
-Same MCU topics as the Teensy firmware (corner ToF at its 5 Hz), plus /scan in the 'laser' frame, the ground truth
+Same MCU topics as the Teensy firmware (corner ToF at its 5 Hz), the depth camera's gyro (/camera/gyro/sample, with a
+small bias for base_node to learn), plus /scan in the 'laser' frame, the ground truth
 on /luna/sim/truth (frame 'world') and every contact with an obstacle on /luna/sim/contact; both for tests only,
 nothing in the robot stack may use them. /luna/sim/estop (Bool) presses the simulated E-stop."""
 import math
@@ -10,12 +11,13 @@ from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.node import Node
-from sensor_msgs.msg import BatteryState, LaserScan
+from sensor_msgs.msg import BatteryState, Imu, LaserScan
 from std_msgs.msg import Bool, Float32MultiArray, String, UInt8
 
 from . import topics as T
 from .entry import run
 from .core.dock_nav import Pose2D
+from .core.robot_model import load_frames
 from .core.sim2d import Sim2D, SimConfig
 from .core.sim_worlds import world
 
@@ -26,16 +28,17 @@ class Sim2DNode(Node):
         self.declare_parameter('world', 'room')
         self.declare_parameter('start_soc', 0.6)
         self.declare_parameter('start_pose', [0.0, 0.0, 0.0])     # world frame; map = world only when (0, 0, 0)
-        self.declare_parameter('drain_w', 44.0)
+        self.declare_parameter('drain_w', SimConfig.drain_w)
         self.declare_parameter('true_turn_slip', SimConfig.true_turn_slip)
         self.declare_parameter('linear_slip', SimConfig.linear_slip)
+        self.declare_parameter('gyro', True)
+        self.declare_parameter('gyro_bias', 0.004)               # rad/s
         p = lambda name: self.get_parameter(name).value
         cfg = SimConfig(start_soc=p('start_soc'), drain_w=p('drain_w'), true_turn_slip=p('true_turn_slip'),
                         linear_slip=p('linear_slip'))
         self.sim = Sim2D(world(p('world')), cfg, start=Pose2D(*p('start_pose')))
         self.contacts_sent = 0
         self.create_subscription(Float32MultiArray, T.MCU_WHEEL_TARGET, self._target, 10)
-        self.create_subscription(Float32MultiArray, T.MCU_HEAD_US, lambda m: None, 10)
         self.estop = False
         self.create_subscription(Bool, T.SIM_ESTOP, lambda m: setattr(self, 'estop', m.data), 10)
         self.p_wheels = self.create_publisher(Float32MultiArray, T.MCU_WHEELS, 10)
@@ -49,6 +52,12 @@ class Sim2DNode(Node):
         self.p_scan = self.create_publisher(LaserScan, T.SCAN, 10)
         self.p_truth = self.create_publisher(Odometry, T.SIM_TRUTH, 10)
         self.p_contact = self.create_publisher(String, T.SIM_CONTACT, 50)
+        frames = load_frames()
+        self.floor_m = frames.origin('tof_down_fl')[2]             # flat floor under the cliff sensors
+        self.p_gyro = self.create_publisher(Imu, T.CAMERA_GYRO, 20) if p('gyro') else None
+        r = frames.pose('camera_imu_frame')[1]
+        self.gyro_axis = (r[2][0], r[2][1], r[2][2])               # base_link z in the IMU frame
+        self.gyro_bias = p('gyro_bias')
         self.dt, self.ticks = 0.02, 0
         self.poses = deque(maxlen=20)                              # (sim time, pose): the last 0.4 s
         self.create_timer(self.dt, self._tick)
@@ -65,7 +74,9 @@ class Sim2DNode(Node):
         self.ticks += 1
         self.p_wheels.publish(Float32MultiArray(data=[*s.pos, *s.vel]))
         self.p_bump.publish(UInt8(data=s.bumpers))
-        self.p_cliff.publish(Float32MultiArray(data=[0.055] * 4))
+        self.p_cliff.publish(Float32MultiArray(data=[self.floor_m] * 4))
+        if self.p_gyro:
+            self._gyro()
         self.p_estop.publish(Bool(data=self.estop))      # like the real one, it only reports: base_node must stop
         self.p_sense.publish(Bool(data=s.docked))
         if self.ticks % 10 == 0:                         # firmware: corner ToF with the battery at 5 Hz
@@ -74,19 +85,26 @@ class Sim2DNode(Node):
             self.get_logger().warn(f'contact: {c.name} ({c.kind}) {"/".join(c.bands)}')
             self.p_contact.publish(String(data=f'{c.t:.2f} {c.name} {c.kind} {",".join(c.bands) or "-"}'))
         self.contacts_sent = len(s.contacts)
-        if self.ticks % 10 == 0:                         # the JBD BMS answers at ~5 Hz
+        if self.ticks % 10 == 0:                         # the Daly BMS answers at ~5 Hz
             self._battery()
         self._tag_and_truth()
 
     def _battery(self):
         s = self.sim
         b = BatteryState()
-        b.voltage = 12.0 + 4.8 * s.soc
+        b.voltage = 12.4 + 1.0 * s.soc + (0.8 if s.charging else 0.0)   # LiFePO4 4S: flat, the BMS gives the SoC
         b.percentage = s.soc
         b.current = 3.0 if s.charging else -3.0
         b.temperature = 28.0
         b.present = True
         self.p_batt.publish(b)
+
+    def _gyro(self):
+        m = Imu()
+        m.header.stamp, m.header.frame_id = self.get_clock().now().to_msg(), 'camera_imu_frame'
+        w = self.sim.twist[1] + self.gyro_bias + self.sim.rng.gauss(0.0, 0.002)
+        m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z = (a * w for a in self.gyro_axis)
+        self.p_gyro.publish(m)
 
     def _tag_and_truth(self):
         s = self.sim

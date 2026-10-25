@@ -1,8 +1,0 @@
-{
-  "name": "luna-robot-link",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Luna yüzü ile robot yüz köprüsü arasındaki tarayıcı bağlantısı",
-  "scripts": { "test": "node --test robot-link.test.mjs" }
-}

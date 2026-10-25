@@ -1,0 +1,23 @@
+# NOMINAL intrinsics, CALIBRATE: Raspberry Pi Camera v2 (IMX219, 3.04 mm) at 640×480 for face_track_node
+# (fx = 320 / tan 31.1°). Only the face bearing comes from it, so a few degrees off is acceptable; replace with
+# `ros2 run camera_calibration cameracalibrator` output for better eye contact at the image edges.
+image_width: 640
+image_height: 480
+camera_name: face_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [530.470, 0.0, 319.5, 0.0, 530.470, 239.5, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [530.470, 0.0, 319.5, 0.0, 0.0, 530.470, 239.5, 0.0, 0.0, 0.0, 1.0, 0.0]

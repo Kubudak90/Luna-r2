@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from luna_robot.core.assistant import AssistantClient, HttpResult, TransportError  # noqa: E402
-from luna_robot.core.attention import Attention  # noqa: E402
+from luna_robot.core.attention import Attention, AttentionConfig  # noqa: E402
 from luna_robot.core.audio import (ListenConfig, Listener, ListenWindow, MicGate, Segmenter,  # noqa: E402
                                    SegmenterConfig)
 from luna_robot.core.speech import HttpWavTts, NullTts, TtsError, make_tts  # noqa: E402
@@ -34,7 +34,7 @@ def chunk(level=0):
 
 def run_listener(listener, script, t0=0.0, speaking=lambda t: False):
     """script: [(seconds, speech flag)] fed in 20 ms chunks from t0 → [(t, utterance seconds)] for kept utterances.
-    The flag goes through the MicGate like audio_node's DoA does (0 while the head moves)."""
+    The flag goes through the MicGate like audio_node's DoA does (0 while the body turns)."""
     t, out = t0, []
     for seconds, speech in script:
         for _ in range(round(seconds / CHUNK)):
@@ -128,23 +128,22 @@ class ListenerGate(unittest.TestCase):
         self.assertEqual(out + out2, [])
         self.assertFalse(listener.window.listening(t))
 
-    def test_head_motion_holds_the_start(self):
+    def test_turning_holds_the_start(self):
         listener = make_listener()
         listener.window.talk(0.0)
-        listener.gate.head(0.0, 0.0, 0.0)
-        listener.gate.head(0.1, 10.0, 0.0)                           # 100 °/s: moving until 0.4 s
+        listener.gate.body(0.1, 0.5)                                  # turning: moving until 0.4 s
         out, _ = run_listener(listener, [(1.5, True), (1.0, False)])
         self.assertEqual(len(out), 1)
-        self.assertLess(out[0][1], 1.5 + 0.6)                        # started only once the head settled
+        self.assertLess(out[0][1], 1.5 + 0.6)                        # started only once the body settled
 
-    def test_head_turning_mid_question_does_not_cut_it(self):
-        # Live run 2026-10-25: attention turned the head 0.3 s into the question, the gated flag went to 0 and the
-        # question was cut 0.7 s later (1.4 s WAVs for 2.5 s of speech).
+    def test_body_turning_mid_question_does_not_cut_it(self):
+        # R1 live run 2026-10-25: attention turned the head 0.3 s into the question, the gated flag went to 0 and the
+        # question was cut 0.7 s later (1.4 s WAVs for 2.5 s of speech). R2 turns the body instead; the same rule.
         listener = make_listener()
         listener.window.talk(0.0)
         out, t = run_listener(listener, [(0.2, False), (0.5, True)])
-        for i in range(30):                                          # the head turns for 0.6 s, 50 °/s
-            listener.gate.head(t + i * CHUNK, i * 1.0, 0.0)
+        for i in range(30):                                          # the body turns for 0.6 s
+            listener.gate.body(t + i * CHUNK, 0.5)
         out2, _ = run_listener(listener, [(2.0, True), (1.0, False)], t0=t)
         self.assertEqual(out, [])
         self.assertEqual(len(out2), 1)
@@ -165,32 +164,33 @@ class ListenerGate(unittest.TestCase):
         self.assertEqual(len(out), 2)
 
 
-class HeadDuringAQuestion(unittest.TestCase):
-    def test_head_stays_while_luna_takes_a_question_and_the_eyes_still_look(self):
-        att, t, targets, gazes = Attention(), 0.0, [], []
+class BodyDuringAQuestion(unittest.TestCase):
+    def test_body_stays_while_luna_takes_a_question_and_the_eyes_still_look(self):
+        att, t, turns, gazes = Attention(), 0.0, [], []
         for _ in range(60):                                          # 3 s, voice at +35°, window open
             t += 0.05
-            out = att.update(t, bearing_deg=35.0, speech=True, hold_head=True)
-            targets.append(out.head_target)
+            out = att.update(t, bearing_deg=35.0, speech=True, hold=True)
+            turns.append(out.turn)
             gazes.append(out.gaze)
-        self.assertEqual(set(targets), {None})
+        self.assertEqual(set(turns), {None})
         self.assertAlmostEqual(gazes[-1][0], round(35 / 60, 3))
-        for _ in range(20):                                          # question over: the head may turn now
+        for _ in range(20):                                          # question over: the body may turn now
             t += 0.05
             out = att.update(t, bearing_deg=35.0, speech=True)
-        self.assertGreater(out.head_target[0], 0.0)
+        self.assertGreater(out.turn, 0.0)
 
-    def test_a_turned_head_is_not_brought_back_mid_question(self):
+    def test_a_turn_under_way_stops_when_a_question_starts(self):
         att, t = Attention(), 0.0
-        for _ in range(80):
+        for _ in range(12):
             t += 0.05
             out = att.update(t, bearing_deg=40.0, speech=True)
-        pan = out.head_target[0]
+        self.assertGreater(out.turn, 0.0)
+        stops = []
         for _ in range(200):                                         # silence long past hold_s, window still open
             t += 0.05
-            out = att.update(t, hold_head=True)
-            self.assertIsNone(out.head_target)
-        self.assertEqual(att.cmd[0], pan)
+            stops.append(att.update(t, hold=True).turn)
+        self.assertEqual(stops[0], 0.0)                              # stopped at once, then left alone
+        self.assertEqual(set(stops[AttentionConfig().stop_ticks:]), {None})
 
 
 class DroppedAnswer(unittest.TestCase):

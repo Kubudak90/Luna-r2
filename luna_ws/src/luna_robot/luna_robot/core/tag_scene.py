@@ -1,7 +1,7 @@
-"""Synthetic head-camera images of the dock tag, for the simulated camera and the detection checks. Needs numpy
+"""Synthetic camera images of the dock tag, for the simulated camera and the detection checks. Needs numpy
 (present in the ROS images); the rest of core does not.
 
-The tag is ray-traced on the wall plane through an ideal pinhole (what apriltag_ros expects as `image_rect`):
+The tag is ray-traced on its mast plate through an ideal pinhole (what apriltag_ros expects as `image_rect`):
 every pixel is supersampled, then optional defocus blur and sensor noise are added."""
 import numpy as np
 
@@ -10,7 +10,7 @@ from .dock_tag import TAG_FACE_X_DOCKED, TagGeometry
 from .frames import Pose
 
 # Tag frame as in apriltag: centre of the tag, x right and y down as seen from the front, z into the wall.
-# Dock frame: origin at the seated base_link pose on the floor, x towards the wall, y left, z up.
+# Dock frame: origin at the seated base_link pose on the floor, x towards the tag mast, y left, z up.
 DOCK_R_TAG = ((0.0, 0.0, 1.0), (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0))
 
 
@@ -27,10 +27,11 @@ def _blur(img, sigma):
     return np.apply_along_axis(lambda m: np.convolve(m, k, mode='valid'), 0, tmp)
 
 
-def render(cam, opt_T_tag, g=TagGeometry(), plate_m=0.064, tag_id=0, black=30.0, white=220.0, plate=70.0,
+def render(cam, opt_T_tag, g=TagGeometry(), plate_m=None, tag_id=0, black=30.0, white=220.0, plate=70.0,
            wall=120.0, blur_px=0.0, noise=2.0, ss=3, rng=None):
     """uint8 grey image (cam.height, cam.width) of the tag whose pose in the camera optical frame is opt_T_tag.
     noise: sensor noise sigma in grey levels, or a ready (height, width) float32 noise frame (cheaper per frame)."""
+    plate_m = g.plate_m if plate_m is None else plate_m
     img = np.full((cam.height, cam.width), wall, dtype=np.float32)
     corners = [opt_T_tag.apply((sx * plate_m / 2, sy * plate_m / 2, 0.0)) for sx in (-1, 1) for sy in (-1, 1)]
     if all(c[2] > 1e-3 for c in corners):

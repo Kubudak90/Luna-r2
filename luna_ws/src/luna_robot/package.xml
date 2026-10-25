@@ -2,8 +2,8 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>luna_robot</name>
-  <version>0.1.0</version>
-  <description>Luna companion robot: track base, pan/tilt head, docking, power policy, face bridge, SLAM, Nav2 and go-to-dock (ROS 2 Humble).</description>
+  <version>0.2.0</version>
+  <description>Luna R2 companion robot: differential-drive base, fixed head with a screen face, docking, power policy, face bridge, SLAM, Nav2 and go-to-dock (ROS 2 Humble).</description>
   <maintainer email="huseyinarslan89@hotmail.com">Hüseyin Arslan</maintainer>
   <license>Proprietary</license>
 
@@ -17,12 +17,14 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
-  <!-- head cameras and dock tag (tags:=sim | usb) -->
+  <!-- dock tag on the Gemini colour camera (tags:=sim | gemini); the Gemini driver (orbbec_camera) is optional -->
   <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>apriltag_msgs</exec_depend>
-  <exec_depend>usb_cam</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <!-- face camera (face_track_node) and the mic array's control interface (audio_node) -->
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-usb</exec_depend>
   <!-- mapping / navigation (luna_nav.launch.py, dock_nav_node) -->
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>

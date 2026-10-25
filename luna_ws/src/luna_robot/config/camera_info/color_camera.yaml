@@ -1,0 +1,22 @@
+# NOMINAL intrinsics of the Gemini 336 colour camera at 1280×720 (fx = 640 / tan 43°), for sim_camera_node only.
+# On the robot OrbbecSDK_ROS2 publishes the factory calibration on /camera/color/camera_info; apriltag_ros reads that.
+image_width: 1280
+image_height: 720
+camera_name: camera_color
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [686.316, 0.0, 639.5, 0.0, 686.316, 359.5, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [686.316, 0.0, 639.5, 0.0, 0.0, 686.316, 359.5, 0.0, 0.0, 0.0, 1.0, 0.0]

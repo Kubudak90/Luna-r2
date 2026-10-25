@@ -1,65 +1,60 @@
-# luna_mcu — Teensy 4.1 micro-ROS yazılımı (2026-10-17)
+# luna_mcu — Teensy 4.1 micro-ROS yazılımı (R2, 2026-10-25)
+
+R1 yazılımından devam ediyor. R2'de değişenler:
+- **Kafa servoları yok.** R2'nin kafası sabit; `/luna/mcu/head_us` aboneliği, servo pinleri ve servo regülatörlerinin EN hattı kaldırıldı. Pin 27, 28, 29 boşta.
+- **Pil yönetimi: JBD yerine Daly akıllı BMS.** JBD Türkiye'de satılmıyor. Paket artık 4S2P LiFePO4.
+- **Uçurum sensörleri: VL53L4CD yerine VL53L1X.** VL53L4CD Türkiye'de stokta yok. Böylece köşe ve zemin sensörlerinin sekizi de aynı parça ve aynı kütüphane.
+- **Motorlar:** Pololu 37D 70:1. Çıkış milinde 4480 sayım/tur, 12 V'ta 150 rpm. İleri besleme katsayısı 15 rad/s.
 
 ## Ne var
-- `lib/luna_core/`: Arduino'ya bağlı olmayan, saf C++ çekirdek. Hepsi Mac'te test ediliyor.
-  - `jbd_bms.*`: JBD BMS ile konuşur.
-    - İstek çerçevelerini üretir: 0x03 temel bilgi (`DD A5 03 00 FF FD 77`) ve 0x04 hücre voltajları (`DD A5 04 00 FF FC 77`).
-    - Gelen yanıtı bayt bayt ayrıştırır. Sağlama toplamını, bitiş baytını, durum baytını ve uzunluğu denetler; bozuk veriden sonra yeniden senkron olur.
-    - Çıkardıkları: voltaj, akım, kalan/nominal kapasite (→ SoC), NTC sıcaklıkları (en sıcağı `temperature` olur), koruma bayrakları (→ `power_supply_health`) ve hücre voltajları.
-    - `BatteryMonitor`: 3 s boyunca geçerli 0x03 çerçevesi gelmezse `present=false` olur. Hücre voltajları yalnızca kendi çerçeveleri tazeyse eklenir; tek başlarına `present` yapmaz.
-  - `cliff.*`: VL53L4CD kanalını metreye çevirir. Sensör yoksa ya da veri yolundan düşmüşse, örnek yoksa, durum≠0 ise veya örnek 100 ms'den eskiyse **0.0** döner (0.0 = uçurum).
-    - `CliffRetry`: düşen sensörü yeniden başlatma kuralı. 2 s'de en fazla bir deneme, sensör başına en fazla 5 deneme, ve yalnızca motorlar kapalıyken (başlatma ~25 ms bloklar).
-  - `debounce.*`: eşik + histerezis + bekleme (`ThresholdDebounce`). Her iki geçiş için de değer 100 ms boyunca karşı tarafta kalmalı. Dock algılamada P4 skoruyla kullanılıyor (aşağıda).
-  - `dock_id.h` (Elektrik R01, 17.10.2026): P4 kimlik hattı.
-    - Dock P4'ü 10k ile 5 V'a, robot 10k ile GND'ye çeker: robot beslenen dock'a oturunca P4 = 2.50 V, `DOCK_INHIBIT` açıkken 0.76 V. Dock'ta değilse ya da dock beslemesizse 0 V.
-    - `p4_score(v, inhibit) = 1 − |v − beklenen|`. `ThresholdDebounce(0.45, 0.25, 100 ms)` bu skorla çalışır: |ΔV| ≤ 0.55 V'ta "oturdu", 0.75 V'u aşınca 100 ms sonra "kalktı". NaN hiçbir zaman "oturdu" yapmaz.
-    - `ChargeEnable`: `/luna/mcu/charge_enable` isteği. Gelen `false` yalnız 1 s geçerli; varsayılan şarj serbest.
-  - `drive.*`: ileri besleme + PI hız döngüsü. Hız 32-bit sayaç farkından hesaplanır, sayaç taşması sorun olmaz. Hedef veya `pwm_cap` NaN/inf ise motorlar durur.
+- `lib/luna_core/`: Arduino'ya bağlı olmayan, saf C++ çekirdek. Hepsi bilgisayarda test ediliyor.
+  - `daly_bms.*`: Daly BMS ile UART üzerinden konuşur.
+    - İstek çerçevesi her komut için aynı biçimde: `A5 40 <komut> 08 00×8 <toplam>`. Örneğin 0x90 için toplam `7D`.
+    - Okunan komutlar:
+      - 0x90: gerilim, akım, SoC
+      - 0x92: en sıcak ve en soğuk sensör
+      - 0x93: FET durumu ve kalan Ah
+      - 0x94: hücre sayısı ve çevrim
+      - 0x95: hücre gerilimleri; 4 hücre iki çerçevede gelir
+      - 0x98: alarm bitleri
+    - Yanıtlar bayt bayt ayrıştırılır. Başlangıç baytı, BMS adresi (0x01), uzunluk ve sağlama toplamı denetlenir. Bozuk bir çerçeveden sonra, zaten okunmuş baytlar içindeki bir sonraki `A5`'ten yeniden senkron olunur.
+    - `BatteryMonitor`: 3 s boyunca geçerli 0x90 çerçevesi gelmezse `present=false` olur. Öbür alanlar (sıcaklık, kalan Ah, hücreler, sağlık) yalnızca kendi yanıtları tazeyse doldurulur; değilse NaN, 0 ya da UNKNOWN kalır.
+    - Sağlık (`power_supply_health`) yalnız Daly'nin 2. seviye (koruma) alarmlarından ve donanım arızalarından gelir. 1. seviye uyarılar dikkate alınmaz, çünkü gerilim, sıcaklık ve SoC zaten sayı olarak gidiyor ve AGX kendi eşiklerini uyguluyor.
+  - `cliff.*`: VL53L1X kanalını metreye çevirir. Sensör yoksa, veri yolundan düşmüşse, örnek yoksa, durum≠0 ise ya da örnek 100 ms'den eskiyse **0.0** döner (0.0 = uçurum).
+    - `CliffRetry`: düşen sensörü yeniden başlatma kuralı. 2 s'de en fazla bir deneme, sensör başına en fazla 5 deneme, yalnızca motorlar kapalıyken.
+  - `debounce.*`, `dock_id.h`: P4 dock kimlik hattı ve `charge_enable` kirası. R1'den değişmedi (Elektrik R01).
+  - `drive.*`: ileri besleme + PI hız döngüsü. Sayaç taşması sorun olmaz. Hedef ya da `pwm_cap` NaN/inf ise motorlar durur.
 - `src/main.cpp`:
-  - **Uçurum sensörleri:** 4 adet VL53L4CD Wire1 üzerinde (SDA1 17 / SCL1 16). XSHUT sırasıyla açılıp 0x40–0x43 adreslerine taşınır. Okuma ve `/luna/mcu/cliff` yayını 50 Hz. Düşen sensör, motorlar dururken yeniden başlatılmayı dener.
-  - **BMS:** Serial1 üzerinden (9600 baud) 0x03 ve 0x04 sırayla sorgulanır, her biri 2 Hz. `BatteryState.cell_voltage` doluyor. Saat agent ile senkronsa (`rmw_uros_sync_session`, 60 s'de bir) `header.stamp` da doluyor.
-  - **Agent bağlantısı:** micro-ROS'un yeniden bağlanma kalıbı kullanılıyor (WAITING → AVAILABLE → CONNECTED → DISCONNECTED).
-    - Agent'a 500 ms'de bir ping atılır.
-    - Agent yokken motorlar kapalı tutulur. Agent geri gelince bütün ROS varlıkları yeniden kurulur.
-  - **Watchdog:** donanım watchdog'u (WDOG1, 0,5 s).
-    - Bağlıyken yalnızca 10 ms'lik kontrol zamanlayıcısı besler.
-    - Bağlı değilken `loop()` besler; bu sırada motorlar zaten kapalı.
-    - Döngü takılırsa Teensy sıfırlanır.
-  - **Dock algılama (17.10.2026'dan beri P4):** `/luna/mcu/dock_sense` = "robot beslenen dock'a oturdu". P4 pin 41'den (A17) 100 Hz okunur, 50 Hz yayımlanır. Eski kontak gerilimi okuması (`VCHG_ADC`, pin 40) yalnız teşhis için `pins.h`'te duruyor; CC fazında kontak gerilimi paket gerilimine yakın kaldığı için dock algılamada artık kullanılmıyor.
-  - **Şarj izni:** `/luna/mcu/charge_enable` (Bool, AGX → MCU) aboneliği. `false` gelince `DOCK_INHIBIT` (pin 35) HIGH olur; dock P4'ü 0.76 V görür ve kontakları ~10 ms içinde söndürür. Robot yine "oturdu" okur.
-    - `false` yalnız 1 s geçerli (`CHARGE_LEASE_MS`); `dock_node` değeri 20 Hz'de yayımlar. Agent yokken pin LOW tutulur. Yani varsayılan her durumda "şarj serbest".
-    - Executor artık 4 tutamaç kullanıyor (zamanlayıcı + 3 abonelik). micro_ros_platformio'nun teensy41 için kullandığı `colcon.meta` en çok 5 abonelik, 10 yayıncıya izin veriyor (şu an 3 ve 7).
-  - **Uyarılar:** `rcl_publish` dönüş değerleri artık sayılıyor; derleme uyarısı kalmadı.
-- `host_test/`: Mac'te çalışan birim testleri (ASan + UBSan açık).
+  - **Uçurum sensörleri:** 4 adet VL53L1X Wire1 üzerinde (SDA1 17 / SCL1 16).
+    - XSHUT sırasıyla açılıp sensörler 0x40–0x43 adreslerine taşınır.
+    - Kısa mod, 20 ms bütçe, 50 Hz. Zemin pencereden 60 mm aşağıda.
+    - Her okumadan önce adres yoklanır. Yanıt vermeyen sensör "ölü" sayılır ve motorlar dururken yeniden başlatılır.
+  - **Köşe sensörleri:** 4 adet VL53L1X Wire üzerinde, 0x30–0x33. R1'deki gibi. 16×4 ROI hâlâ ayarlanmıyor (bkz. ana README, "Engel algılama").
+  - **BMS:** Serial1 9600 baud, 125 ms'de bir istek. 0x90 4 Hz, diğer beş komut sırayla, her biri 1,25 s'de bir. `cell_voltage` doluyor. `power_supply_technology` = LIFE.
+  - **Agent bağlantısı ve watchdog:** R1'deki gibi. Agent yokken motorlar kapalı, şarj serbest. WDOG1 0,5 s.
+  - **Executor:** 3 tutamaç (zamanlayıcı + `wheel_target` + `charge_enable`).
+- `host_test/`: bilgisayarda çalışan birim testleri (ASan + UBSan açık).
 
 ## Doğrulananlar
-- **Birim testleri:** `./host_test/run.sh` → **19 test, 246 kontrol, 0 hata** (Apple clang, `-Werror`, 17.10.2026). Yeni testler: "P4 dock ID window" (oturma, tolerans köşeleri, histerezis, kendi inhibit'imiz, 0 V, 3.3 V kısa devre, NaN) ve "charge_enable lease" (varsayılan, yenileme, 1 s sonunda düşme, `true`, agent kaybı, millis() taşması).
-- **Teensy 4.1 derlemesi BAŞARILI**, kendi kodumuzda **0 uyarı** (`pio run -e teensy41`, 2026-10-17; P4 + `charge_enable` ile temiz derlemede yeniden denendi).
-  - Bellek: FLASH kod 121 320 B + veri 15 544 B, RAM1 değişkenler 38 048 B.
-  - Platform `teensy@5.1.0` (Teensyduino 1.60, GCC 11.3) olarak sabitlendi. `teensy` 5.2.0 ve sonrası GCC 15 ile geliyor; micro-ROS Humble `rcutils` bu sürümle derlenmiyor (`clock_gettime` örtük bildirim hatası).
-  - Kütüphaneler: micro_ros_platformio `cfee17f`, VL53L1X 1.3.1, STM32duino VL53L4CD 1.0.5, QuadEncoder `59e6208`.
-  - Derleme ASCII karakterli geçici bir kopyada yapıldı. **Bu klasörün kendi yolunda derleme başarısız** (2026-10-17 denendi): micro_ros_platformio bağımlılıkları indirirken `ament_cmake clone failed … Çok fazla argüman` hatası veriyor; yoldaki boşluklar (`Mary’nin Klasörü`, `Luna Robot`, `Yazılım R01 …`) git komutunu bölüyor. Derlemek için `firmware/luna_mcu` klasörünü boşluksuz ve ASCII bir yola kopyalayın (örn. `~/luna_mcu`) ve `pio run -e teensy41` orada çalıştırın.
-- **Enkoder pinleri:** 30/31 ve 36/37, QuadEncoder kütüphanesinin `ARDUINO_TEENSY41` tablosunda var; XBAR girişleri (23/22, 16/17) çakışmıyor. Bu yüzden `pins.h` değişmedi.
-- **Güvenli varsayılanlar:** BMS yokken `present=false` ve **voltage=0.0** gönderilir, NaN asla gönderilmez.
-  - AGX tarafında `kinematics.pwm_cap(NaN)` artık 0 döndürüyor (`luna_ws/.../core/kinematics.py`, test eklendi; AGX testleri 41/41 geçiyor).
-  - Firmware de NaN `pwm_cap` gelirse duruyor.
+- **Birim testleri:** `./host_test/run.sh` → **19 test, 188 kontrol, 0 hata** (Linux, GCC, `-Werror`, 25.10.2026).
+  - Yeni Daly testleri: istek baytları, her komutun çözümü, hücre çerçevelerinin sırası ve eksik çerçeve, bozuk çerçeveler, gürültü ve kesik yanıttan sonra yeniden senkron, alarm → sağlık eşlemesi, alanların tazelik kuralı, BMS yokken güvenli varsayılan.
+  - Sürüş testleri 4480 sayım/tura göre güncellendi.
+- **Teensy 4.1 derlemesi BAŞARILI**, **0 uyarı** (`pio run -e teensy41`, PlatformIO 6.1.18, Linux, 25.10.2026, micro-ROS Humble kaynaktan derlendi, 249 s).
+  - Bellek: FLASH kod 117 520 B + veri 15 544 B, RAM1 değişkenler 37 280 B. R1'den biraz küçük: servo ve VL53L4CD kütüphaneleri çıktı.
 
-## Tasarım kararları
-- **Neden WDT_T4 kütüphanesi değil:** Kütüphanenin WDT3 yolunda pencere değeri hiç sıfırlanamıyor (en az 1/32 s). Pencere açılmadan, yani 10 ms'de bir besleme hemen sıfırlamaya yol açardı. Bunun yerine WDOG1 doğrudan yazmaçlarla kuruldu. Bu watchdog'un en kısa süresi 0,5 s.
-- **Sensörü yeniden başlatırken alınan önlemler:** Önce diğer ölü sensörlerin XSHUT'u LOW çekiliyor; böylece 0x29'da yalnızca yeniden başlatılan sensör bulunuyor. Sürücü nesnesi de sıfırdan kuruluyor. Aksi halde `InitSensor`, adres zaten verilmiş sanıp adres atamayı atlar ve olmayan adresten okumaya çalışırken sonsuza kadar takılır.
-
-## Bu Mac'e kurulanlar (kullanıcı onayıyla)
-- pipx ile PlatformIO 6.2.0 (Python 3.12).
-- Homebrew ile `cmake` ve `binutils`.
-- `~/.platformio/penv` → `~/.local/pipx/venvs/platformio` sembolik bağlantısı. micro-ROS betiği bu yolu arıyor.
+## Derleme
+- Platform: `teensy@5.1.0` (Teensyduino 1.60, GCC 11.3). Neden sabit olduğu `platformio.ini`'de yazıyor.
+- Kütüphaneler: micro_ros_platformio `cfee17f`, Pololu VL53L1X 1.3.1, QuadEncoder `59e6208`. STM32duino VL53L4CD kaldırıldı.
+- Klasör yolunda boşluk veya ASCII dışı karakter olmamalı. micro_ros_platformio bağımlılıkları indirirken git komutu bölünüyor (R1'de görüldü). Gerekirse klasörü örneğin `~/luna_mcu` altına kopyalayıp `pio run -e teensy41` orada çalıştırın.
 
 ## Hâlâ doğrulanmayanlar (donanım gerekiyor)
-- **Hiçbir şey gerçek kartta denenmedi.** Tezgâhta ölçülmesi gerekenler:
-  - halı ve zeminde VL53L4CD durum kodları (durum 1/2 gereksiz durmalara yol açabilir);
-  - JBD UART seviyesi (Teensy 5 V toleranslı değil) ve gerçek çerçeveler;
-  - PID katsayıları;
-  - micro-ROS agent bağlantısı ve yeniden bağlanma.
-- **Watchdog tezgâh testi:** Kasıtlı bir sonsuz döngüyle 0,5 s sonra sıfırlandığı görülmeli.
-- **Sıfırlama sırasında DRV_SLP:** Teensy sıfırlanırken pinler sürülmez. `DRV_SLP` hattında aşağı çeken bir direnç olduğu doğrulanmalı (yoksa ~10k ile GND'ye eklenmeli); aksi halde sıfırlama anında motor sürücüsü uyanık kalabilir.
-- **P4 ve DOCK_INHIBIT:** Pencere değerleri hesaptan geliyor (Elektrik R01 `HESAPLAR.md`). Tezgâhta ölçülmesi gerekenler: oturunca P4 ≈ 2.50 V ve `dock_sense` true; `charge_enable=false` verilince P4 ≈ 0.76 V, dock kontakları ~10 ms içinde sönük, `dock_sense` hâlâ true; pin 35'teki 100k pull-down Teensy sıfırlanırken inhibit'i kapalı tutuyor mu.
-- stm32duino sürücüsünün NACK'te sonsuz tekrar denemesi tamamen kalkmadı: yoklama ile okuma arasında sensör düşerse döngü takılır. Bu durumda artık watchdog Teensy'yi sıfırlıyor.
+- **Hiçbir şey gerçek kartta denenmedi.**
+- **Daly akım işareti:** Kaynaklara göre 30000'in üstü deşarj. Bazı Daly yazılımlarında ters olabilir. Şarj cihazı takılıyken `/luna/mcu/battery` akımı **pozitif** olmalı; değilse `daly_bms.cpp`'deki tek satırdaki işaret çevrilir.
+- **Daly UART seviyesi:** Teensy 5 V toleranslı değil. Bağlamadan önce BMS'in TX hattı ölçülmeli. UART portu Bluetooth modülüyle ortak, modül takılı olmamalı.
+- **Daly hücre çerçevesi sayısı:** UART'ta ⌈hücre/3⌉ çerçeve bekleniyor. Bazı kartlar 16 çerçeve gönderebilir. Fazlası hata sayılır, ilk iki çerçeve yine kullanılır.
+- **Halı ve zeminde VL53L1X durum kodları.** Durum 1/2 gereksiz durmalara yol açabilir; kısa mod ve 20 ms bütçe tezgâhta denenmeli.
+- PID katsayıları ve ileri besleme (37D 70:1 ile).
+- micro-ROS agent bağlantısı ve yeniden bağlanma.
+- **Watchdog tezgâh testi:** kasıtlı bir sonsuz döngüyle 0,5 s sonra sıfırlandığı görülmeli.
+- **Sıfırlama sırasında DRV_SLP:** hatta 10k aşağı çeken direnç olmalı (pins.h'te yazıyor). Olmazsa sıfırlama anında motor sürücüsü uyanık kalabilir.
+- **P4 ve DOCK_INHIBIT:** R1 ile aynı devre. R2 dock'unda yay pimlerinin altta olmasıyla değişmiyor, ama tezgâhta yeniden ölçülmeli.

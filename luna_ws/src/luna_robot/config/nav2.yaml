@@ -1,6 +1,7 @@
-# Nav2 (Humble 1.1) for Luna: skid-steer track base that turns in place. Footprint from R06: 0.340 m along x
-# (track length) × 0.378 m across y (track band |X| 141..189 mm). Limits match core/kinematics.DriveLimits:
-# 0.35 m/s, 1.2 rad/s. Localization and /map come from slam_toolbox (config/slam_*.yaml), not AMCL.
+# Nav2 (Humble 1.1) for Luna R2: a round differential-drive base, Ø 0.360 m, that turns in place about its centre,
+# so its footprint is a circle (robot_radius 0.18) and a turn sweeps nothing beyond it. Limits match
+# core/kinematics.DriveLimits: 0.30 m/s, 1.5 rad/s (Nav2 uses 1.2). Localization and /map come from slam_toolbox
+# (config/slam_*.yaml), not AMCL.
 #
 # Velocity chain (launch/nav2.launch.py):
 #   controller_server, behavior_server → cmd_vel_nav → velocity_smoother → cmd_vel_smoothed
@@ -9,7 +10,7 @@
 # Nav2 never publishes /luna/mcu/wheel_target or /luna/dock/cmd_vel (test/test_nav_config.py checks this).
 # "Slow near obstacles" happens twice: RPP scales speed down by costmap cost, and collision_monitor halves it
 # when scan points enter the slowdown box and caps it so a collision is ≥ 1.2 s away.
-# The LiDAR plane is at 0.59 m (urdf laser frame, R08: Z589.8): obstacles lower than that are invisible to every layer in this
+# The LiDAR plane is at 0.55 m (urdf laser frame, C1 on the head): obstacles lower than that are invisible to every layer in this
 # file; with obstacle_sensors:=lidar the bumpers (base_node gate) are the only stop for them. obstacle_sensors:=all
 # (the default) loads config/nav2_obstacle_sensors.yaml on top: depth camera and corner ToF layers and sources.
 
@@ -93,7 +94,7 @@ controller_server:
       yaw_goal_tolerance: 0.12
     FollowPath:
       plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
-      desired_linear_vel: 0.35
+      desired_linear_vel: 0.30
       lookahead_dist: 0.5
       min_lookahead_dist: 0.3
       max_lookahead_dist: 0.9
@@ -111,7 +112,7 @@ controller_server:
       cost_scaling_dist: 0.4
       cost_scaling_gain: 1.0
       inflation_cost_scaling_factor: 3.0   # = inflation_layer.cost_scaling_factor
-      use_rotate_to_heading: true          # tracks turn in place instead of arcing
+      use_rotate_to_heading: true          # turns in place instead of arcing: free for a round base
       rotate_to_heading_min_angle: 0.785
       rotate_to_heading_angular_vel: 1.0
       max_angular_accel: 2.5
@@ -154,9 +155,9 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity: [0.35, 0.0, 1.2]
+    max_velocity: [0.30, 0.0, 1.2]
     min_velocity: [-0.20, 0.0, -1.2]
-    max_accel: [0.6, 0.0, 2.5]           # track motors: first-order lag ≈ 0.15 s
+    max_accel: [0.6, 0.0, 2.5]           # gearmotors: first-order lag ≈ 0.15 s
     max_decel: [-0.8, 0.0, -3.0]
     odom_topic: odom
     odom_duration: 0.1
@@ -177,7 +178,7 @@ collision_monitor:
     polygons: [PolygonSlow, FootprintApproach]
     PolygonSlow:
       type: polygon
-      points: [0.55, 0.40, 0.55, -0.40, -0.30, -0.40, -0.30, 0.40]   # footprint + 0.38 m ahead, 0.21 m aside
+      points: [0.55, 0.38, 0.55, -0.38, -0.25, -0.38, -0.25, 0.38]   # outline + 0.37 m ahead, 0.20 m aside
       action_type: slowdown
       max_points: 3
       slowdown_ratio: 0.5
@@ -208,8 +209,8 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[[0.17, 0.189], [0.17, -0.189], [-0.17, -0.189], [-0.17, 0.189]]"
-      footprint_padding: 0.01               # the real footprint for RPP's collision checks (global_costmap: 0.14)
+      robot_radius: 0.18                    # round R2: the outline is the bumper ring
+      footprint_padding: 0.01
       plugins: [obstacle_layer, inflation_layer]
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
@@ -228,7 +229,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.45           # > circumscribed radius hypot(0.18, 0.199) = 0.27 m
+        inflation_radius: 0.40           # > robot_radius + padding
       always_send_full_costmap: true
 
 global_costmap:
@@ -239,19 +240,14 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       transform_tolerance: 0.5
-      footprint: "[[0.17, 0.189], [0.17, -0.189], [-0.17, -0.189], [-0.17, 0.189]]"
-      # Padding 0.14 for the planner only. NavFn plans for a point and treats the inscribed circle (min half side +
-      # padding) as an obstacle, but Luna turns in place (RPP rotate_to_heading) and its corners sweep the
-      # circumscribed circle, 0.254 m. With 0.01 the inscribed radius was 0.18 m: plans passed a low box 0.18–0.25 m
-      # off and the turn at the end of the passage brushed it (dock course, shoe box). 0.17 + 0.14 = 0.31 ≥ 0.254 +
-      # 5 cm: wherever the plan puts the centre, a turn in place keeps 5 cm from what the costmap knows (0.09 still
-      # let a corner pass at 0.6 cm). The price, measured (worlds door70/75/80): a 0.70 m doorway is closed to the
-      # planner, 0.75 m and 0.80 m are open (on paper 2 × 0.31 m + one 0.05 m cell ≈ 0.67 m, but SLAM's door jambs
-      # come out a cell thick). The 0.68 m gap beside the dock course's shoe box is closed too: the robot goes round
-      # the cabinet (README_TR.md, "Engel algılama").
-      # local_costmap keeps 0.01: RPP's collision check uses the real footprint (padding there too stopped the robot
-      # in that gap: "collision ahead").
-      footprint_padding: 0.14
+      robot_radius: 0.18
+      # Padding 0.04 for the planner. R1's rectangular track base needed 0.14 here: NavFn plans for a point and
+      # keeps only the inscribed circle clear, but the corners of a box turning in place sweep the circumscribed one,
+      # and that padding closed 0.70 m doorways. R2 is a circle: inscribed = circumscribed = 0.18 m, a turn in place
+      # sweeps nothing new, and 0.04 is only a margin for map error. 2 × 0.22 m + one 0.05 m cell ≈ 0.49 m: on paper a 0.60 m
+      # doorway stays open, but with the wall ends one cell thick in the map it is marginal: door60 passed 1 of 2 sim
+      # runs, door70 and door80 pass (README_TR.md, "Engel algılama"; test/test_nav_config.py).
+      footprint_padding: 0.04
       resolution: 0.05
       track_unknown_space: true
       plugins: [static_layer, obstacle_layer, inflation_layer]
@@ -275,5 +271,5 @@ global_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55             # > padded circumscribed radius hypot(0.31, 0.329) = 0.45 m
+        inflation_radius: 0.45             # > padded radius 0.22 m
       always_send_full_costmap: true
