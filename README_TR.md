@@ -159,17 +159,24 @@ LiDAR düzlemi Z550. Bunun altındaki engelleri şunlar görüyor:
 
 **Köşe ToF'ları:** 16 × 4'lük ROI'nin firmware'de hâlâ ayarlanmadığı R1'den kalan açık bir iş. ROI olmazsa sensör zemini 0,43 m'de görür ve `tof.py`'nin 0,70 m'lik menzili yanlış olur.
 
-**Parkur sonuçları** (Docker, `obstacle_sensors:=all`, her biri tek koşu, simülatörün gerçek konumuyla ölçüldü):
+**Parkur sonuçları** (Docker, 4 çekirdek, `obstacle_sensors:=all`, simülatörün gerçek konumuyla ölçüldü, köşe ToF'ları düz bakarken):
 
 | Dünya | Beklenen | Sonuç | Süre | Temas | En yakın geçiş |
 |---|---|---|---|---|---|
-| `toy` (8 cm oyuncak kutusu yolda) | hedefe varmak | **vardı** | 20,5 s | 0 | kutuya 34 cm |
-| `table` (sehpa, üstü Z40–45) | vardı | **vardı** | 31,6 s | 0 | ayağa 30 cm, üstüne 25 cm |
-| `chair` (sandalye) | vardı | **vardı** | 21,4 s | 0 | ayağa 30 cm, oturağa 27 cm |
-| `door` (70 cm kapı, puf kapatıyor) | Nav2 vazgeçmeli | **vazgeçti** | 31,2 s | 0 | |
-| `door70` (70 cm açık kapı) | vardı | **vardı** | 19,0 s | 0 | R1'in paleti bu kapıdan geçemiyordu |
-| `door60` (60 cm açık kapı) | vardı | **2 koşunun 1'inde vardı** | 21,4 s | 0 | Sınırda. Düşen koşuda planlayıcı açıklıktan yol bulamadı (aşağıda) |
-| `dock` (kayıtlı haritada dock'a git, yolda ayakkabı kutusu, top, oyuncak araba) | dock'a oturmak | **oturamadı** (1 koşu) | 240 s | 0 | Kutuya 7,8 cm (aşağıda) |
+| `toy` (8 cm oyuncak kutusu yolda) | hedefe varmak | **vardı** | 18,0 s | 0 | kutuya 30 cm |
+| `table` (sehpa, üstü Z40–45) | vardı | **vardı** | 35,6 s | 0 | ayağa 32 cm, üstüne 28 cm |
+| `chair` (sandalye) | vardı | **vardı** | 18,8 s | 0 | ayağa 21 cm, oturağa 18 cm |
+| `door` (70 cm kapı, puf kapatıyor) | Nav2 vazgeçmeli | **vazgeçti** | 31,6 s | 0 | |
+| `door70` (70 cm açık kapı) | vardı | **vardı** | 17,9 s | 0 | R1'in paleti bu kapıdan geçemiyordu |
+| `door60` (60 cm açık kapı) | vardı | **2/2 vardı** | 19,4 / 19,5 s | 0 | |
+| `dock` (kayıtlı haritada dock'a git, yolda ayakkabı kutusu, top, oyuncak araba) | dock'a oturmak | **2/2 oturdu** | 61,0 / 59,9 s | 0 | **ayakkabı kutusuna 5,2–6,7 cm**, topa 28 cm |
+
+**Bulunan ve düzeltilen sorun: köşe ToF'larının yönü.**
+- İlk koşularda dock parkuru başarısız oldu: RPP ayakkabı kutusunun yanında 20 kez "collision ahead" dedi, sonra Nav2 240 s'de vazgeçti. 60 cm kapı da 2 koşunun 1'inde geçemedi.
+- Nedeni: köşe ToF'ları 30° dışa bakıyordu. `tof_range_node` her okumayı koninin bütün genişliğinde (27°) bir yay olarak haritaya işliyor. Yan duvarı eğik gören bir koni, yayın uçlarını gerçek yüzeyin 14–20 cm önüne düşürüyordu. Kutu ile duvar arasındaki 68 cm'lik geçidin ortasında robot merkezine ~2 cm'lik şerit kalıyordu.
+- Ölçüm simülatörün kendi ToF modeliyle yapıldı (`core/sim2d.corners`, `core/tof.arc_points`).
+- Düzeltme: ToF'lar düz ileri/geri bakıyor (`urdf/luna.urdf`; `docs/TASARIM_R2.md`, "Algılama"). Ardından bütün senaryolar yeniden koşuldu, 11/11 geçti.
+- **Kalan risk:** dock yolunda robot, LiDAR'ın görmediği 10 cm'lik kutunun 5–7 cm yanından geçiyor. Temas yok, ama pay dar. Gerçek robotta halı ve kayma bunu daraltabilir; tampon halkası yine de değmeden önce hisseder. R1, planlayıcı payını 0,14'e çıkarıp güneydeki yolu seçerek ≥ 29 cm bırakıyordu; bunun bedeli 70 cm kapıydı. R2'de bu takas bilerek kapıdan yana yapıldı.
 
 ## SLAM, Nav2 ve dock'a git
 
@@ -178,24 +185,14 @@ R1'deki gibi: slam_toolbox ile harita, Nav2 (NavFn + Regulated Pure Pursuit, hı
 - **Odometri:** tekerler ve Gemini jiroskobu.
 - **Dock öncesi poz:** dock ekseninde 0,6 m geride. Devir konisi `docs/TASARIM_R2.md`, "Dock" bölümünde.
 
-**Senaryo sonuçları** (Docker, 4 çekirdek, her biri tek koşu):
+**Senaryo sonuçları** (Docker, 4 çekirdek; ToF düzeltmesinden sonraki koşu):
 
 | Senaryo | Sonuç | Ayrıntı |
 |---|---|---|
-| Haritalama (`sim_nav_check.py mapping`) | **17/17** | Acil durdurma Nav2 sürerken motor hedefini 0,03 s'de sıfırladı, robot 0,42 s'de durdu. Dolabın arkasındaki keşif hedefine vardı; SLAM hatası 2,2 cm. Dock'a git → devir → CHARGING 22,9 s, dock'ta 6 mm. Dock pozunu duvardan öğrendi (gerçeğinden 2,5 cm, 0,4°). Harita ve poz grafı kaydedildi |
-| Yerelleştirme + düşük pil (`localization`, `sim_soc:=0.24`) | **12/12** | Kayıtlı haritada başlangıç hatası 0,6 cm. Düşük pil dock'a gidişi kendisi başlattı, CHARGING 26,9 s, dock'ta 18 mm, politika `charge`'a geçti |
+| Haritalama (`sim_nav_check.py mapping`) | **17/17** | Acil durdurma Nav2 sürerken motor hedefini 0,03 s'de sıfırladı, robot 0,42 s'de durdu. Dolabın arkasındaki keşif hedefine vardı; SLAM hatası 0,5 cm. Dock'a git → devir → CHARGING 22,8 s, dock'ta 11 mm. Dock pozunu duvardan öğrendi (gerçeğinden 1,3 cm, 0,2°). Harita ve poz grafı kaydedildi |
+| Yerelleştirme + düşük pil (`localization`, `sim_soc:=0.24`) | **12/12** | Kayıtlı haritada başlangıç hatası 0,4 cm. Düşük pil dock'a gidişi kendisi başlattı, CHARGING 21,7 s, dock'ta 20 mm, politika `charge`'a geçti |
 
-**Açık iki sınır durum:**
-- **60 cm kapı:**
-  - Kâğıt üstünde açık: 2 × 0,22 m dolgulu yarıçap + bir 0,05 m hücre = 0,49 m < 0,60 m.
-  - Ama duvar uçları haritada bir hücre kalın çıkınca açıklık bir hücreye iniyor ve gürültü onu da kapatabiliyor.
-  - 70 ve 80 cm kapılarda sorun yok. Evdeki iç kapılar çoğunlukla 70 cm'den geniş.
-- **Dock yolunda alçak eşyalar:**
-  - Kutu ile kuzey duvarı arasındaki 0,68 m'lik geçidi R2 açık görüyor (R1 dolgu yüzünden kapalı görüyordu) ve oradan gitmeye çalışıyor.
-  - RPP kutunun yanında 20 kez "collision ahead" diyip durdu. İlerleme olmayınca kurtarma–yeniden planlama döngüsüne girdi, 240 s'de vazgeçti. Temas olmadı.
-  - Ayar sürüyor (planlayıcı payı, RPP'nin çarpışma bakışı). R1'in bu parkurdaki çözümü `docs/R1_README_TR.md`, "Dock yolunda ayakkabı kutusu".
-
-İlk koşu setinde bir önceki denemeden arkada kalan bir yığın (iki `luna_base`) haritalamaya karıştı. O koşular geçersiz sayıldı, temiz konteynerde yeniden koşuldu; yukarıdaki sonuçlar yeniden koşulanlar.
+Bir koşu setinde, önceki denemeden arkada kalan bir yığın (iki `luna_base`) haritalamaya karıştı. Bunu `sim_nav_check`'in "only base_node drives the MCU" kontrolü yakaladı. O set geçersiz sayıldı. Yukarıdaki sonuçlar temiz konteynerde koşuldu.
 
 ## Tekrarlamak için
 

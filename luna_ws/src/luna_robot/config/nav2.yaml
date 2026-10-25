@@ -244,9 +244,9 @@ global_costmap:
       # Padding 0.04 for the planner. R1's rectangular track base needed 0.14 here: NavFn plans for a point and
       # keeps only the inscribed circle clear, but the corners of a box turning in place sweep the circumscribed one,
       # and that padding closed 0.70 m doorways. R2 is a circle: inscribed = circumscribed = 0.18 m, a turn in place
-      # sweeps nothing new, and 0.04 is only a margin for map error. 2 × 0.22 m + one 0.05 m cell ≈ 0.49 m: on paper a 0.60 m
-      # doorway stays open, but with the wall ends one cell thick in the map it is marginal: door60 passed 1 of 2 sim
-      # runs, door70 and door80 pass (README_TR.md, "Engel algılama"; test/test_nav_config.py).
+      # sweeps nothing new, and 0.04 is only a margin for map error. 2 × 0.22 m + one 0.05 m cell ≈ 0.49 m: a 0.60 m
+      # doorway stays open with about one cell to spare (sim: door60 2/2, door70 passes; README_TR.md, "Engel
+      # algılama"; test/test_nav_config.py).
       footprint_padding: 0.04
       resolution: 0.05
       track_unknown_space: true

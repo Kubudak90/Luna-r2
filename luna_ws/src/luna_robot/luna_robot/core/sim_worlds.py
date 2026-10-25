@@ -8,8 +8,8 @@
   dock   `room` plus small low objects on the way to the dock (same scan as `room`: its saved map still fits)
   door   a wall across the room, its 0.70 m doorway blocked by a 0.30 m ottoman: the only way to the goal is blocked
   door60, door70, door80   the same wall with an open doorway 0.60 / 0.70 / 0.80 m wide: the round R2 turns inside its
-         own outline, so the planner needs no turning margin: 0.70 and 0.80 pass (R1's tracks: not 0.70), 0.60 is
-         marginal (open on paper, closed when the wall ends come out one cell thick in the map)
+         own outline, so the planner needs no turning margin: all three pass (R1's tracks: not 0.70); 0.60 with
+         about one 0.05 m map cell to spare
 Everything except the walls and the chair back is below the LiDAR plane (Z0.55)."""
 import math
 

@@ -87,7 +87,7 @@ class RobotModel(unittest.TestCase):
         self.assertEqual(f.origin('camera_link'), load_frames().origin('camera_link'))
         self.assertEqual(f.origin('laser'), load_frames().origin('laser'))
 
-    def test_tof_frames_look_out_of_the_ring_at_30_deg(self):
+    def test_tof_frames_look_straight_out_of_the_ring(self):
         f = load_frames()
         for name, sx, sy in (('tof_fl', 1, 1), ('tof_fr', 1, -1), ('tof_bl', -1, 1), ('tof_br', -1, -1)):
             with self.subTest(frame=name):
@@ -95,8 +95,7 @@ class RobotModel(unittest.TestCase):
                 self.assertEqual((math.copysign(1, x), math.copysign(1, y)), (sx, sy))   # tof_fl on Luna's left
                 self.assertAlmostEqual(math.hypot(x, y), 0.175, places=3)               # windows in the shell, R175
                 self.assertAlmostEqual(z, 0.100)                                       # just under the ring top
-                want = math.radians(30) if sx > 0 else math.radians(150)
-                self.assertAlmostEqual(f.yaw(name), sy * want, places=4)               # 30° off the axis, outwards
+                self.assertAlmostEqual(abs(f.yaw(name)), 0.0 if sx > 0 else math.pi, places=4)   # straight out
         self.assertEqual(FRAMES, ('tof_fl', 'tof_fr', 'tof_bl', 'tof_br'))
 
     def test_depth_camera_optical_axis_points_forward_and_15_deg_down(self):
@@ -163,10 +162,10 @@ class CornerTof(unittest.TestCase):
             self.assertAlmostEqual(v, 0.100 / math.sin(math.radians(13.5)), delta=0.01)
 
     def nearest_in_cone(self, face_x, frame='tof_fl'):
-        """Range the FL/FR cone reads to a wide face at robot x = face_x: its inner edge ray is the nearest."""
+        """Range the FL/FR cone reads to a wide face at robot x = face_x: its ray nearest to the face normal."""
         f = load_frames()
         x = f.origin(frame)[0]
-        return (face_x - x) / math.cos(abs(f.yaw(frame)) - TofConfig().fov_rad / 2)
+        return (face_x - x) / math.cos(max(0.0, abs(f.yaw(frame)) - TofConfig().fov_rad / 2))
 
     def test_front_sensors_see_a_low_toy_box_the_lidar_misses(self):
         toy = Block('toy', ROBOT_RADIUS + 0.30, -0.40, ROBOT_RADIUS + 0.50, 0.40, 0.0, 0.08)

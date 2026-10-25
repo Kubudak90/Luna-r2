@@ -107,7 +107,7 @@ class Numbers(unittest.TestCase):
         r = ROBOT_RADIUS + glob['footprint_padding']
         self.assertLessEqual(glob['footprint_padding'], 0.05)
         self.assertGreater(glob['inflation_layer']['inflation_radius'], r)
-        self.assertLess(2 * r + glob['resolution'], 0.60)              # on paper: door60 open (marginal in the sim)
+        self.assertLess(2 * r + glob['resolution'], 0.60)              # door60 open, about one cell to spare
         infl = glob['inflation_layer']
         door_cost = 252 * math.exp(-infl['cost_scaling_factor'] * (0.30 - r))
         self.assertLess(door_cost, 253)                                 # the middle of a 0.60 m doorway is free

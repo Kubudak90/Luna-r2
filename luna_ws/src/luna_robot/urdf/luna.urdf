@@ -68,16 +68,19 @@
   <joint name="mic_array_joint" type="fixed"><parent link="base_link"/><child link="mic_array"/><origin xyz="-0.0700 0 0.3480"/></joint>
 
   <!-- Corner ToF, 4 × VL53L1X (ROI 16 × 4: 27° wide, ≈ 15° tall), in windows of the bumper ring 100 mm above the
-       floor, looking 30° outward from straight ahead / straight back so the round body's sides are covered too.
+       floor, looking straight ahead / straight back. Not turned outward: tof_range_node marks a reading as an arc
+       across the whole 27° cone, and a cone that meets a side wall obliquely then marks points up to 20 cm in front of
+       it, which closed a 0.68 m passage in the simulator (README_TR.md, "Engel algılama"). Straight, a wall beside
+       the robot stays beyond the 0.70 m range. The round body needs no side coverage: turning in place sweeps nothing.
        +x along the beam. Names follow the robot's own sides and the /luna/mcu/corners order [FL, FR, BL, BR]. -->
   <link name="tof_fl"/>
-  <joint name="tof_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_fl"/><origin xyz="0.1434 0.1004 0.1000" rpy="0 0 0.5236"/></joint>
+  <joint name="tof_fl_joint" type="fixed"><parent link="base_link"/><child link="tof_fl"/><origin xyz="0.1434 0.1004 0.1000" rpy="0 0 0"/></joint>
   <link name="tof_fr"/>
-  <joint name="tof_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_fr"/><origin xyz="0.1434 -0.1004 0.1000" rpy="0 0 -0.5236"/></joint>
+  <joint name="tof_fr_joint" type="fixed"><parent link="base_link"/><child link="tof_fr"/><origin xyz="0.1434 -0.1004 0.1000" rpy="0 0 0"/></joint>
   <link name="tof_bl"/>
-  <joint name="tof_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_bl"/><origin xyz="-0.1434 0.1004 0.1000" rpy="0 0 2.6180"/></joint>
+  <joint name="tof_bl_joint" type="fixed"><parent link="base_link"/><child link="tof_bl"/><origin xyz="-0.1434 0.1004 0.1000" rpy="0 0 3.1416"/></joint>
   <link name="tof_br"/>
-  <joint name="tof_br_joint" type="fixed"><parent link="base_link"/><child link="tof_br"/><origin xyz="-0.1434 -0.1004 0.1000" rpy="0 0 -2.6180"/></joint>
+  <joint name="tof_br_joint" type="fixed"><parent link="base_link"/><child link="tof_br"/><origin xyz="-0.1434 -0.1004 0.1000" rpy="0 0 3.1416"/></joint>
   <!-- Floor ToF (cliff), 4 × VL53L1X looking straight down (+x down), windows 60 mm above the floor at the front and
        rear edge, ahead of the casters (x ±0.110) by more than the stopping distance (docs/TASARIM_R2.md, "Uçurum").
        /luna/mcu/cliff order [FL, BL, FR, BR]. -->

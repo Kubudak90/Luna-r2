@@ -48,7 +48,7 @@ EXPLORE = Pose2D(2.3, 1.35, 0.0)
 GOAL = Pose2D(3.5, 0.0, 0.0)
 COURSES = {'toy': (GOAL, 'reach', 180), 'table': (GOAL, 'reach', 180), 'chair': (GOAL, 'reach', 180),
            'door': (GOAL, 'refuse', 300), 'dock': (None, 'dock', 240),
-           # open doorways: the round R2 needs no turning margin; 0.60 m is marginal on the 0.05 m map grid
+           # open doorways: the round R2 needs no turning margin; 0.60 m passes with about one 0.05 m cell to spare
            'door60': (GOAL, 'reach', 180), 'door70': (GOAL, 'reach', 180), 'door80': (GOAL, 'reach', 180)}
 
 

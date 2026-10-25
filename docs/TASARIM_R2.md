@@ -14,7 +14,7 @@ R2, R1'in yerine geçen ikinci tasarım. İki hedefi var:
 | Kafa | Pan/tilt servolu, iki göz kamerası | Sabit kafa, ekranın üstünde tek küçük kamera | Bakışı ekrandaki gözler veriyor. Göz teması için tek kamera yetiyor. Servo, mekanizma ve kablo gitti. |
 | LiDAR | Direkte, Z590 | Kafanın tepesinde, dönme ekseninin üstünde, Z550 | Daha sade görünüm. Robotun hiçbir parçası tarama düzleminin üstünde değil. |
 | Yürüyüş | Palet | Ortada 2 tahrikli teker + önde ve arkada birer sarhoş teker | Aşağıda, "Şasi" bölümünde. |
-| Gövde | 340 × 378 mm dikdörtgen | Ø 360 mm yuvarlak | Yerinde dönerken kendi dairesinin dışına çıkmıyor. Simülatörde 70 cm'lik kapıdan geçiyor (R1 geçemiyordu); 60 cm sınırda. |
+| Gövde | 340 × 378 mm dikdörtgen | Ø 360 mm yuvarlak | Yerinde dönerken kendi dairesinin dışına çıkmıyor. Simülatörde 60 ve 70 cm'lik kapılardan geçiyor (R1 70 cm'den geçemiyordu). |
 | Tampon | Önde ve arkada şerit | Gövdeyi tam saran halka, Z15–110 | Yandan çarpmayı da algılıyor. 1,5 cm'den yüksek oyuncakları da hissediyor. |
 | Bilgisayar | Jetson AGX Xavier | Jetson Orin NX 16 GB (Waveshare Super kit, OpenZeka) | Türkiye'de stokta bulunan en iyi Orin. Dil modeli Kimi bulutunda çalıştığı için 16 GB yetiyor. |
 | Derinlik kamerası | OAK-D Lite (pasif stereo) | Orbbec Gemini 336 (IR projektörlü aktif stereo, IMU) | OAK-D Türkiye'de ya stoksuz ya çok pahalı. Gemini düz duvarda ve karanlıkta da derinlik veriyor. Jiroskopu odometriye giriyor. |
@@ -43,7 +43,7 @@ Toplam yükseklik **561 mm**. Mikrofon dizisi omuz plakasında, boynun arkasınd
 
 **Neden 4 tahrikli teker değil?**
 - **Dönüşte kayma.** Dört tahrikli tekerle dönmek, tekerleri yana sürterek olur (kaymalı yönlendirme). R1'in paleti de aynı sorunu yaşadı: dönüşler odometrede %45'e varan hatayla çıkıyordu (`true_turn_slip` 1,45). Yana sürtünme parkeyi çizer, halıda takılır, motor akımını artırır.
-- **Yerinde dönme.** İki tahrikli teker tam ortadayken robot kendi merkezi çevresinde döner. Yuvarlak gövde de dönerken kendi dairesinin dışına taşmaz. Bu yüzden Nav2'nin planlayıcısına dönüş payı gerekmiyor (`nav2.yaml`). Simülatörde 70 ve 80 cm'lik kapılardan geçiyor; R1'de 70 cm'lik kapı kapalıydı. 60 cm kâğıt üstünde açık ama harita ızgarası yüzünden sınırda: 2 koşunun 1'inde geçti (README, "Engel algılama").
+- **Yerinde dönme.** İki tahrikli teker tam ortadayken robot kendi merkezi çevresinde döner. Yuvarlak gövde de dönerken kendi dairesinin dışına taşmaz. Bu yüzden Nav2'nin planlayıcısına dönüş payı gerekmiyor (`nav2.yaml`). Simülatörde 70 ve 80 cm'lik kapılardan geçiyor; R1'de 70 cm'lik kapı kapalıydı. 60 cm'de de geçiyor (2/2), ama haritanın 5 cm'lik ızgarasında yalnız bir hücre pay kalıyor (README, "Engel algılama").
 - **Odometri.** İki tekerde dönüş geometriden hesaplanır. Ayrıca Gemini'nin jiroskopu yön bilgisini düzeltiyor (`base_node`). SLAM'e daha temiz bir başlangıç tahmini gidiyor.
 - **Basitlik.** 2 motor, 1 sürücü, 2 enkoder. Dört tekerde bunların hepsi iki katı olurdu.
 
@@ -77,7 +77,10 @@ Toplam yükseklik **561 mm**. Mikrofon dizisi omuz plakasında, boynun arkasınd
   - Renk kamerası: dock etiketini okuyor.
   - IMU'nun jiroskopu: yön bilgisi.
   - Simülatördeki kör bölge: zemini gövdenin 0,41 m önünden başlayarak görüyor. Daha yakınını köşe ToF'ları ve tampon kapatıyor.
-- **4 köşe VL53L1X**, tampon halkasının pencerelerinde, Z100'de. Düz ileri ve geri değil, 30° dışa bakıyorlar; böylece yuvarlak gövdenin yanları da kapsanıyor. Tam önü Gemini görüyor.
+- **4 köşe VL53L1X**, tampon halkasının pencerelerinde, Z100'de, **düz ileri ve düz geri** bakıyor.
+  - İlk taslakta yanları da kapsasın diye 30° dışa çevrilmişlerdi. Simülatörde bunun bir zararı çıktı: `tof_range_node` her okumayı koninin bütün genişliğinde bir yay olarak haritaya işliyor. Yan duvarı eğik gören bir koni, yayın uçlarını duvarın 14–20 cm önüne düşürüyor ve 68 cm'lik bir geçidi kapatıyordu.
+  - Düz bakınca yandaki duvar 0,70 m'lik menzilin dışında kalıyor. Bu ancak dışa dönüklük 7°'nin altındayken sağlanıyor.
+  - Yuvarlak gövde yerinde dönerken yanlara taşmadığı için yan kapsama gerekmiyor. Önü ayrıca Gemini görüyor (90°).
 - **Tampon halkası:** ön yarım halka ±45°'deki iki mikro anahtara (FL, FR) yaslanıyor, arka yarım halka da aynı şekilde (BL, BR).
   - Tam önden ya da arkadan (±20° içinde) gelen çarpma iki anahtarı birden kapatıyor.
   - Halka, gövde sert bir şeye değmeden 10 mm önce kapanıyor.
