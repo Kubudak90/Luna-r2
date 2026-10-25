@@ -41,6 +41,7 @@ setup(
             'attention_node = luna_robot.attention_node:main',
             'assistant_node = luna_robot.assistant_node:main',
             'speech_node = luna_robot.speech_node:main',
+            'stt_node = luna_robot.stt_node:main',
         ],
     },
 )

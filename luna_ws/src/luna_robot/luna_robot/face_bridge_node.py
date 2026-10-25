@@ -3,8 +3,11 @@
 Standard library HTTP server only (no extra packages in the ROS container). Endpoints:
   GET /events  text/event-stream, one JSON face event per message
   GET /health  'ok'
+  POST /talk   a touch on the face to talk (push-to-talk) → /luna/voice/talk; 204. A browser request from any
+               origin other than allowed_origin is refused (403), so another web page cannot open the microphones.
 Default bind is 127.0.0.1 (kiosk browser on the robot). Set host:=0.0.0.0 only on a trusted LAN
-if a phone should show the face; events carry no personal data."""
+if a phone should show the face; events carry no personal data, and anyone on that LAN can ask Luna to listen
+for one question, as if they touched her face."""
 import json
 import queue
 import threading
@@ -13,11 +16,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
-from std_msgs.msg import Bool, Float32MultiArray, String, UInt8
+from std_msgs.msg import Bool, Empty, Float32MultiArray, String, UInt8
 
 from . import topics as T
 from .entry import run
 from .core.face_mood import MoodMapper, VoiceMood, pick_gaze, voice_state
+
+
+LISTENING_FRESH_S = 1.0     # audio_node publishes /luna/voice/listening at 5 Hz while capture is on
 
 
 class Hub:
@@ -49,11 +55,50 @@ def encode(event):
     return json.dumps(event, separators=(',', ':'))
 
 
-def make_handler(hub, origin, snapshot=lambda: []):
-    """snapshot() returns the face events that bring a newly connected face to the current state."""
+MAX_TALK_BODY = 1024
+
+
+def make_handler(hub, origin, snapshot=lambda: [], on_talk=None):
+    """snapshot() returns the face events that bring a newly connected face to the current state; on_talk() is
+    called for POST /talk (404 without it)."""
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def _cors(self):
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+
+        def do_OPTIONS(self):
+            if self.path != '/talk' or on_talk is None:
+                self.send_error(404)
+                return
+            self.send_response(204)
+            self._cors()
+            self.send_header('Access-Control-Allow-Methods', 'POST')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+            self.end_headers()
+
+        def do_POST(self):
+            if self.path != '/talk' or on_talk is None:
+                self.send_error(404)
+                return
+            sender = self.headers.get('Origin')      # browsers always send it on a POST; curl and tests do not
+            if sender is not None and origin != '*' and sender != origin:
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_TALK_BODY:
+                self.send_error(413)
+                return
+            self.rfile.read(length)                     # the body carries nothing; read it so the connection stays sane
+            on_talk()
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
 
         def do_GET(self):
             if self.path == '/health':
@@ -106,15 +151,20 @@ class FaceBridge(Node):
         # face events through VoiceMood (only the face core's existing vocabulary).
         self.head_gaze, self.voice_gaze, self.voice_gaze_t = (0.0, 0.0), None, 0.0
         self.heard_t, self.assistant, self.speaking = 0.0, 'idle', False
+        self.stt, self.listening, self.listening_t = 'idle', False, float('-inf')
         self.voice = VoiceMood()
         self.create_subscription(Vector3, T.FACE_GAZE, self._voice_gaze, 10)
         self.create_subscription(Float32MultiArray, T.AUDIO_DOA, self._doa, 10)
         self.create_subscription(String, T.ASSISTANT_STATUS, lambda m: setattr(self, 'assistant', m.data), 10)
         self.create_subscription(Bool, T.VOICE_SPEAKING, lambda m: setattr(self, 'speaking', m.data), 10)
+        self.create_subscription(String, T.STT_STATUS, lambda m: setattr(self, 'stt', m.data), 10)
+        self.create_subscription(Bool, T.VOICE_LISTENING, self._listening, 10)
+        self.pub_talk = self.create_publisher(Empty, T.VOICE_TALK, 10)
         self.create_timer(0.1, self._voice_tick)
         host, port = self.get_parameter('host').value, self.get_parameter('port').value
         handler = make_handler(self.hub, self.get_parameter('allowed_origin').value,
-                               snapshot=lambda: MoodMapper.snapshot(**self.state))
+                               snapshot=lambda: MoodMapper.snapshot(**self.state),
+                               on_talk=lambda: self.pub_talk.publish(Empty()))
         server = ThreadingHTTPServer((host, port), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.get_logger().info(f'face events on http://{host}:{port}/events')
@@ -131,9 +181,15 @@ class FaceBridge(Node):
         if len(msg.data) >= 2 and msg.data[1] > 0.5:
             self.heard_t = time.monotonic()
 
+    def _listening(self, msg):
+        self.listening, self.listening_t = bool(msg.data), time.monotonic()
+
     def _voice_tick(self):
         now = time.monotonic()
-        voice = voice_state(listening=now - self.heard_t < 0.5, thinking=self.assistant == 'thinking',
+        # With capture on, audio_node says when Luna takes a question (push-to-talk: after a touch); without it,
+        # any voice the array hears still makes her look attentive.
+        listening = self.listening if now - self.listening_t < LISTENING_FRESH_S else now - self.heard_t < 0.5
+        voice = voice_state(listening=listening, thinking=self.assistant == 'thinking' or self.stt == 'transcribing',
                             speaking=self.speaking)
         for event in self.voice.update(now, voice=voice, dock_state=self.state['dock_state']):
             self.hub.send(event)

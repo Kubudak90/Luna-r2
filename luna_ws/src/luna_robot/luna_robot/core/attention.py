@@ -13,6 +13,8 @@ Who moves the head when:
 - Only in IDLE does the head turn. While docking, the cameras need the head forward: the eyes glance, the head
   stays, and a head that was already turned is brought back to centre first.
 - Luna's own voice (self_speaking) is not a speaker; during a reply Luna keeps facing the person instead.
+- While Luna takes a question someone asked by touching her face (hold_head), the head stays where it is: the
+  servos would be in the recording and that person is right in front anyway. The eyes still go to the voice.
 Attention publishes head targets only while it is using the head and until the head is back at centre."""
 import math
 from dataclasses import dataclass, field
@@ -64,7 +66,8 @@ class Attention:
         self.ema = [0.0, 0.0]
         self.speech_start = self.last_speech = None
 
-    def update(self, now, *, bearing_deg=None, speech=False, dock_state='IDLE', self_speaking=False, head_moving=False):
+    def update(self, now, *, bearing_deg=None, speech=False, dock_state='IDLE', self_speaking=False, head_moving=False,
+               hold_head=False):
         c = self.cfg
         # dt is capped: after a stalled timer (CPU load) the head catches up gently instead of jumping.
         dt = 0.0 if self.last_t is None else max(0.0, min(0.1, now - self.last_t))
@@ -104,11 +107,11 @@ class Attention:
         else:
             self.goal = [0.0, 0.0]
         was_off_centre = self.cmd != [0.0, 0.0]
-        step = c.turn_rate_deg_s * dt
+        step = 0.0 if hold_head else c.turn_rate_deg_s * dt
         for i in (0, 1):
             err = self.goal[i] - self.cmd[i]
             self.cmd[i] = self.goal[i] if abs(err) <= step else self.cmd[i] + math.copysign(step, err)
-        head_target = tuple(self.cmd) if use_head or was_off_centre else None
+        head_target = tuple(self.cmd) if (use_head or was_off_centre) and not hold_head else None
         gaze = None
         if active:
             gaze = (round(_clamp(self.bearing, c.pan_limit_deg) / c.pan_limit_deg, 3), round(-tilt / c.tilt_limit_deg, 3))

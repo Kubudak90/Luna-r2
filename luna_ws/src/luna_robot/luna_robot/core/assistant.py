@@ -182,6 +182,10 @@ class AssistantClient:
     def _offline(self, reason, detail=None):
         return Reply(FALLBACK_TR.get(reason, FALLBACK_OTHER_TR), 'offline', reason, self._redact(detail))
 
+    def forget_last(self):
+        """The last cloud answer was never heard (dropped for a newer question): keep that pair out of the context."""
+        del self.history[-2:]
+
     def ask(self, text):
         """Blocking; call from a worker thread. Returns None for empty input, else a Reply (never raises for
         network or API trouble)."""

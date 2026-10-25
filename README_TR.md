@@ -646,10 +646,10 @@ speech_node ──/luna/voice/speaking──> attention_node (kendi sesi sayılm
 
 ### Açık işler
 
-- **Konuşmayı metne çevirme eklentisi:** `/luna/audio/utterance` → `/luna/assistant/request`. Adaylar: AGX'te whisper, ya da sağlayıcının STT'si (ayrı onay ister).
-- **Uyandırma sözcüğü ya da bas-konuş:** şu an her konuşma "dinliyor" sayılıyor. Buluta yalnız Luna'ya yöneltilen sorular gitmeli.
+- **Konuşmayı metne çevirme eklentisi:** `/luna/audio/utterance` → `/luna/assistant/request`. Adaylar: AGX'te whisper, ya da sağlayıcının STT'si (ayrı onay ister). *25.10.2026: robotta whisper.cpp ile eklendi, "Ses zinciri" bölümü.*
+- **Uyandırma sözcüğü ya da bas-konuş:** şu an her konuşma "dinliyor" sayılıyor. Buluta yalnız Luna'ya yöneltilen sorular gitmeli. *25.10.2026: dokun-konuş eklendi; uyandırma sözcüğü hâlâ yok.*
 - **Mute durumu dışarıdan görünmüyor:** kart düğmesinin (GPI X1D09) okunması belgelerde çelişkili (Seeed sayfası iki farklı okuma veriyor), okunmadı. Robotun kendisi de susturulduğunu yüzde göstermiyor; kırmızı LED kafa içinde kalıyor, kabuktaki LED deliklerinden görünüp görünmeyeceği bilinmiyor.
-- **Söz kesme (barge-in):** Luna konuşurken kişi konuşmaya başlarsa susmuyor.
+- **Söz kesme (barge-in):** Luna konuşurken kişi konuşmaya başlarsa susmuyor. *25.10.2026: yüze dokununca susuyor; sesle söz kesme hâlâ yok.*
 - **`/luna/head/target` tek sahipli değil:** kamera/takip düğümleri de kafayı sürecekse bir öncelik düzenleyici gerekir. Şu an yalnız dikkat düğümü yayımlıyor, o da yalnız kafayı kullandığı sürece.
 
 ## Birleştirme sonrası doğrulama (17.10.2026)
@@ -866,3 +866,185 @@ ros2 launch luna_robot luna_nav.launch.py voice:=false world:=table obstacle_sen
 python3 /ws/src/luna_robot/tools/sim_nav_check.py course --world table --label lidar --map /ws/maps/course_table
 ```
 `dock` parkuru kayıtlı `room` haritasında koşulur: `slam_mode:=localization world:=dock map:=/ws/maps/room_<kip>`.
+
+## Ses zinciri: dokun-konuş, konuşmayı metne çevirme, Türkçe ses (25.10.2026, `ses-zinciri` dalı)
+
+Luna artık bir soruyu baştan sona işleyebiliyor. Yüzüne dokunulur, Luna bir cümle dinler, robotun içinde metne çevirir, asistana sorar ve cevabı Türkçe seslendirir. Hiçbir parçası model eğitimi gerektirmiyor. Zincirin tamamı Docker'da, gerçek HTTP konuşan sahte sunucularla uçtan uca koşuldu. Ardından gerçek whisper modeli ve gerçek piper sesiyle Mac'te (Apple M4) denendi; ROS zinciri de Docker'dan bu gerçek sunuculara bağlanarak koşuldu (aşağıda "Gerçek modellerle deneme"). Gerçek mikrofonla ve Xavier'de henüz denenmedi.
+
+### Akış
+
+```
+yüz (telefon) ──dokunma / basılı tutma──> face_bridge POST /talk ──/luna/voice/talk──> audio_node: 6 s dinleme penceresi
+                                                                      ├──> speech_node: Luna konuşuyorsa susar
+                                                                      └──> assistant_node: yoldaki eski cevabı düşürür
+XVF3800 ──arecord──> audio_node ──/luna/audio/utterance (WAV)──> stt_node ──HTTP──> whisper-server (127.0.0.1:8178, tr)
+stt_node ──/luna/assistant/request──> assistant_node ──/luna/assistant/reply──> speech_node ──HTTP──> piper (127.0.0.1:5000)
+speech_node ──WAV──> aplay ──> XVF3800 hoparlör çıkışı
+audio_node ──/luna/voice/listening──> face_bridge (meraklı yüz) ve attention_node (kafa sabit)
+stt_node ──/luna/stt/status──> face_bridge (metne çevirirken "düşünüyor")
+```
+
+### Dokun-konuş
+
+- **Hangi dokunuş:** kısa dokunma (≤ 360 ms, ≤ 14 px) ya da basılı tutma (430 ms'de). Okşama, yani parmağı kaydırmak, soru açmaz.
+  - Eşikler yüzün kendi hareket eşikleriyle aynı (Telefon Yüzü R01: `gestures.js`, `app.js`). Yüz bu hareketlere kendi tepkisini vermeye devam eder.
+  - Klavyede Enter ya da Boşluk da sayılır.
+- **Tarayıcı tarafı** `web/robot-link.js`: `connectRobot(face, { url, talkTarget })`. `talkTarget` verilmezse eskisi gibi yalnız olay akışı okunur.
+- **Telefon yüzü sayfası bu bağlantıyı henüz çağırmıyor.** R01 teslim klasörü değiştirilmedi. Yüz robota bağlanırken sayfaya şunlar eklenmeli:
+  ```js
+  import { lunaApp } from './app.js';
+  import { connectRobot } from './robot-link.js';
+  connectRobot(lunaApp.core, { url: 'http://127.0.0.1:8765/events', talkTarget: document.getElementById('face-stage') });
+  ```
+- **Yüz köprüsü** `POST /talk` → `/luna/voice/talk` (`std_msgs/Empty`), cevap 204.
+  - Tarayıcıdan gelen ve `Origin`'i `allowed_origin` olmayan istek 403 alır: başka bir web sayfası mikrofonları açamaz.
+  - `Origin`'siz istek (curl, ROS araçları) kabul edilir. Gövde en fazla 1 KB.
+  - `host: 0.0.0.0` ile yerel ağdaki herkes Luna'ya bir soru dinletebilir; yüze dokunmakla aynı şey.
+- **Pencere** (`core/audio.ListenWindow`):
+  - Dokunmadan sonraki 6 s içinde başlayan **tek** konuşma soru olur. Başlamış konuşma, pencere kapansa da sonuna kadar alınır.
+  - 0,5 s içindeki ikinci dokunma aynı dokunma sayılır.
+  - 0,4 s'den kısa bir ses (öksürük gibi) dokunma hakkını harcamaz.
+- **Dinlemediği durumlar:** susturulmuşken, dock'ta (Luna uyuyor) ve Luna konuşurken.
+- **Dokunarak söz kesme:** Luna konuşurken dokunulursa susar, sıradaki cümleleri de atar ve dinlemeye geçer. O sırada buluttan gelmekte olan cevap düşürülür ve sohbet geçmişine yazılmaz.
+- **Yüz:** pencere açıkken ve soru sürerken `curious`, metne çevirme ve bulut beklenirken de `curious`, Luna konuşurken `stroke`. Kayıt kapalıysa eski davranış sürer: dizi bir ses duyunca `curious`.
+- **Kafa:** soru alınırken dikkat düğümü kafayı oynatmaz, yalnız gözler sese döner. Böylece servo sesi kayda girmez; soran kişi zaten karşıda. Soru bitince kafa kişiye döner.
+- **`listen_mode: always`** her konuşmayı soru sayar (ileride uyandırma sözcüğü için). İki kipte de geçerli yeni kural: Luna konuşurken soru başlamaz, Luna kendi sesini soru sanmaz.
+
+### Gizlilik
+
+- `capture` artık açık (`config/luna.yaml`). Ama dokunma olmadan hiçbir ses diske yazılmaz; bellekte yalnız 0,3 s'lik ön tampon tutulur ve dokunmasız konuşmalar atılır.
+- WAV, metne çevrildikten hemen sonra silinir (`delete_wav`).
+- Ses ve metin robottan çıkmaz: whisper-server da piper da 127.0.0.1'de çalışır. Buluta yalnız metin gider, o da eskisi gibi yalnız `cloud:=true` verilmişse ve anahtar varsa.
+- Konuşma metni loglanmaz; yalnız uzunluk, süre ve sonuç yazılır (`/luna/stt/status`: `transcribing`, `ok`, `empty`, `error:<neden>`).
+
+### Konuşmayı metne çevirme (`stt_node`, `core/stt.py`)
+
+- **Varsayılan motor `whisper_server`:** whisper.cpp'nin `whisper-server`'ı; model bellekte kalır.
+  - İstek: `POST /inference`, çok parçalı form. Alanlar: `file` (16 kHz mono WAV), `language=tr`, `response_format=json`, `temperature=0.0`. Cevap: `{"text": …}`.
+  - Kaynak: whisper.cpp `examples/server` README'si ve `server.cpp` (25.10.2026'da okundu).
+- **Diğer motorlar:** `command` (ör. `whisper-cli … -f {wav}`; kabuk kullanılmaz, `{wav}` ve `{lang}` tek argüman olarak verilir) ve `none`. Bilinmeyen motor adı hata verir: bir yazım hatası Luna'yı sessizce sağır etmesin.
+- **Halüsinasyon süzgeci:** Whisper sessizlikte ve gürültüde altyazı yazıları uydurur ("Altyazı M.K.", "İzlediğiniz için teşekkür ederim", "[Müzik]").
+  - Bu cümleler ve köşeli ya da yuvarlak parantezli ses etiketleri atılır. Geriye bir şey kalmazsa soru gönderilmez.
+  - Türkçe I/İ büyük harfleri doğru küçültülür. Sıradan "Teşekkürler" atılmaz.
+- **Anlaşılamayan soru sessiz kalmaz** (`reply_on_failure`): boş sonuçta "Seni tam anlayamadım. Bir daha söyler misin?", sunucu yoksa "Şu an konuşmanı anlayamıyorum. Biraz sonra tekrar dener misin?" denir.
+- **Model:** varsayılan `ggml-large-v3-turbo-q5_0.bin`; Türkçede küçük modellerden belirgin biçimde daha iyi. **Xavier'deki hızı ölçülmedi;** yavaş kalırsa önce `audio_ctx: 768`, sonra `ggml-small.bin` denenir. `timeout_s` 20 s.
+- **`audio_ctx`** (varsayılan 0 = 30 s'lik tam pencere): kodlayıcının penceresini kısaltır. 768 yaklaşık 15 s'dir; en uzun soru 12 s olduğu için hepsi sığar. M4'te süreyi yarıya indirdi, doğruluk aynı kaldı (aşağıda).
+- **`prompt`** (başlangıç ipucu) boş bırakıldı: "Luna" ipucu ismi düzeltmedi, `audio_ctx` ile birleşince gürültüye kelime uydurttu.
+
+### Türkçe ses (`speech_node`, `core/speech.py`)
+
+- **Varsayılan motor `piper_http`:** piper'ın HTTP sunucusu (`python3 -m piper.http_server`).
+  - `POST /synthesize` `{"text", "length_scale"}` → WAV. WAV, `aplay`'e stdin'den verilir; örnekleme hızı WAV başlığından okunur.
+  - Ses modeli bir kez yüklenir. Kaynak: OHF-Voice/piper1-gpl `docs/API_HTTP.md` (25.10.2026).
+- **Tek Türkçe ses:** `tr_TR-dfki-medium`. rhasspy/piper-voices'ta fahrettin ve fettah sesleri katkıcıların isteğiyle kaldırılmış (25.10.2026).
+- Konuşma hızı `tts_length_scale` ile ayarlanır; 1.1 biraz daha yavaş, çocuklar için denenebilir.
+- Sunucu ya da `aplay` yoksa hata bir kez loglanır, düğüm çalışmaya devam eder ve Luna sessiz kalır.
+- Ses örnekleri: `Önizlemeler/Ses_Ornekleri_2026-10-25/` (tanışma cümlesi hız 1.0 ve 1.1; ROS zincirinin söylediği "anlayamadım" ve "bulut kapalı" cevapları). Piper'ın süreleri her seferinde biraz rastgele değişir, o yüzden 1.1 her cümlede tam %10 yavaş çıkmaz.
+
+### launch
+
+- `luna.launch.py` artık `stt_node`'u da başlatır.
+- `voice_servers:=true` (varsayılan) whisper-server'ı ve piper sunucusunu `config/luna.yaml`'daki adreslerle başlatır. Program ya da model yoksa yalnız bir log satırı yazar.
+- Model yolları: `whisper_model:=/models/whisper/ggml-large-v3-turbo-q5_0.bin`, `piper_voice:=/models/piper/tr_TR-dfki-medium.onnx`.
+- İki sunucu `launch_util.STOP_AS_CLEAN_EXIT` önekiyle başlar: launch'ın kapanış SIGINT'i sunucuya SIGTERM olarak gider ve süreç temiz çıkar. Sunucu kendi kendine düşerse çıkış kodu olduğu gibi görünür.
+- `docker/compose.yaml`: ana makinedeki `/opt/luna/models`, konteynerde `/models` olarak salt okunur bağlanır.
+
+### Kurulum (Jetson'da DENENMEDİ, modeller indirilmedi)
+
+```bash
+git clone https://github.com/ggml-org/whisper.cpp && cd whisper.cpp
+cmake -B build -DGGML_CUDA=1 && cmake --build build -j --config Release
+sh ./models/download-ggml-model.sh large-v3-turbo-q5_0 /opt/luna/models/whisper
+python3 -m pip install "piper-tts[http]"
+python3 -m piper.download_voices tr_TR-dfki-medium --data-dir /opt/luna/models/piper
+```
+
+- `whisper-server` PATH'te olmalı (`build/bin`).
+- Mac'te deneme için kurulan: `brew install whisper-cpp` (1.9.5; bağımlılık olarak llama.cpp ve ggml de geldi), Python 3.13 sanal ortamında `piper-tts[http]` 1.8.0 (onnxruntime 1.31). Model ve ses `~/.cache/luna-voice/` altında (whisper 547 MB, SHA256 Hugging Face'teki değerle aynı; Türkçe ses 60 MB). Silmek için: `rm -rf ~/.cache/luna-voice`.
+- JetPack 5'in Python 3.8'iyle `piper-tts` uyumu ve onnxruntime'ın aarch64 paketi denenmedi. Olmazsa piper ayrı bir konteynerde 5000 portunda çalıştırılır.
+
+### Bu dalda doğrulananlar
+
+| Kontrol | Nerede | Sonuç |
+|---|---|---|
+| `python3 -m unittest discover -s test` (eski 260 + yeni 37) | Mac, Py 3.15 | **297 OK**, 22 atlandı (numpy/PyYAML yok) |
+| `colcon build`, `colcon test` | Docker `luna-nav:humble`, Py 3.10 | **297/297**, 0 atlanan |
+| `cd web && npm test` (+4: dokunma, basılı tutma ve okşama ayrımı; `/talk` isteği; gerçek yüz çekirdeğiyle bağlantı) | Mac | **8/8** |
+| `firmware/luna_mcu/host_test/run.sh` | Mac | 19 test / 246 kontrol (firmware değişmedi) |
+| Testler gerçekten hata yakalıyor mu: bilerek bozulan 19 davranış | Mac | **19/19'u test kırdı.** İlk turda 2'si kaçtı (Luna konuşurken kayıt, Türkçe büyük I); testler güçlendirildi |
+| Canlı zincir | Docker, `--network none`, `doa:=mock`, sahte MCU (SoC 0.60), sahte whisper-server / piper / aplay (gerçek HTTP) | aşağıda |
+| Gerçek modeller: Luna'nın `core/stt.py` ve `core/speech.py` kodu gerçek whisper-server ve piper'a karşı | Mac (M4, Metal) | aşağıda, "Gerçek modellerle deneme" |
+| ROS zinciri gerçek sunuculara karşı | Docker → Mac'teki whisper-server ve piper (`192.168.5.2`) | aşağıda |
+| launch sunucuları başlatıyor mu | Docker, PATH'te aynı adlı sahte `whisper-server` ve `piper.http_server` | doğru argümanlar (`-m`, `-l tr`, `luna.yaml`'daki host/port, `-sns`); zincir onlarla çalıştı; kapanışta **14/14 süreç temiz**, arkada sunucu kalmadı |
+
+Bozulan 19 davranış: pencerenin tek soruda kapanması, dokunmasız kayıt, Luna konuşurken kayıt, susturma, çift dokunma, Origin denetimi, gövde sınırı, halüsinasyon süzgeci, Türkçe I, dil alanı, kabuk birleştirme, bilinmeyen motor, sentez sırasında durdurma, WAV denetimi, okşama, basılı tutmanın iki kez tetiklemesi, ağ hatası, kafa dönünce kesilme, soru sırasında kafa dönmesi.
+
+Canlı koşu (25.10.2026). Sahte sesler 20 s'lik bir döngüde konuşuyor (+35° 3,0–5,5 s, −30° 11,0–13,0 s):
+- **A. Dokunma** (yüz sayfasının Origin'i) → 204.
+  - Sahte ses 3,0–5,5 s → 3,5 s'lik WAV (0,3 ön tampon + 2,5 + 0,7).
+  - whisper'a `language=tr`, `response_format=json`, 16 kHz mono gitti → istek "Merhaba Luna, bugün hava nasıl?" → asistanın çevrimdışı cevabı → piper'a iki cümle → aplay.
+  - Yüz: `curious` ×2, ardından `stroke` ×2.
+- **B. Luna konuşurken dokunma** → aplay aynı anda kesildi, ikinci cümle çalınmadı, `speaking` 0,2 s sonra false oldu. İkinci ses (11,0–13,0 s) 3,0 s'lik WAV oldu.
+- **Kafa:** iki pencerede de hiç kafa komutu gitmedi. Kafa soru bitince, cevap sırasında kişiye döndü.
+- **C.** `Origin: https://evil.example` → 403, kayıt yok.
+- **D.** Dokunmadan konuşan ses → kayıt yok.
+- **F.** Dock'ta (CHARGING) dokunma → "touch to talk ignored: asleep on the dock", kayıt yok.
+- Koşu sonunda `/tmp/luna_utterances` boştu: WAV'lar okunduktan sonra silindi. Kapanış: launch çıkış kodu 0, 12/12 süreç temiz.
+- launch, whisper-server ve piper kurulu olmadığını iki log satırıyla bildirdi; düğümler etkilenmedi.
+
+### Gerçek modellerle deneme (Mac, 25.10.2026)
+
+Piper (`tr_TR-dfki-medium`) on Türkçe cümleyi seslendirdi; WAV'lar robotun kaydettiği biçime (16 kHz mono) çevrildi ve whisper-server'a (`large-v3-turbo-q5_0`, Metal) Luna'nın kendi `WhisperServerStt`'siyle gönderildi. Her cümle üç biçimde: temiz, gürültülü (SNR 10 dB), uzak ve gürültülü (−20 dB, SNR 5 dB). Konuşma sentetik olduğu için sonuçlar gerçek bir insan sesinden iyimser olabilir.
+
+| Durum | Tam doğru | Kelime hata oranı | Yazıya çevirme süresi |
+|---|---|---|---|
+| Temiz | 5/10 | 0.23 | ort 1.28 s (ilk istek 1.74 s) |
+| Gürültü, SNR 10 dB | 5/10 | 0.24 | ort 1.23 s |
+| Uzak + gürültü, SNR 5 dB | 5/10 | 0.29 | ort 1.23 s |
+
+- **Doğru çıkanlar:** "Merhaba Luna, bugün hava nasıl?", "Saat kaç oldu?", "Yarın okula gidecek miyim?", "Işıkları kapatır mısın lütfen", "Çok güzel bir şarkı söyle bana" üç biçimde de harfi harfine doğru.
+- "Bir, iki, üç, dört, beş" → "1, 2, 3, 4, 5": anlam doğru, ölçü hata sayıyor.
+- **"Luna" adı** 9 cümlenin 4'ünde doğru yazıldı; diğerlerinde "Yuna", "Juna", "Yunan", "buna". İpucu ("Luna" ya da "Luna ile konuşuyorum.") bunu düzeltmedi (4/9 ve 5/9). Dokun-konuş için önemli değil: soru yine anlaşılır. İleride uyandırma sözcüğü için whisper'a güvenilmemeli.
+- Diğer hatalar: "mırlar" → "varlar", "Ağaçlar kışın" → "Ağaç daha kışın".
+- **Sessizlik ve gürültü:** 3 s sessizlik, hafif gürültü (−45 dBFS), gürültü (−25 dBFS) ve 0,5 s'lik tık sesinin dördüne de whisper tam olarak "Altyazı M.K." yazdı; süzgeç dördünü de attı (sonuç `empty`).
+- **`audio_ctx 768`:** ortalama süre 1.25 s'den 0.62 s'ye indi, kelime hata oranı 0.251'e karşı 0.256, sessizlikte uydurma yok. İpucuyla birlikte kullanıldığında gürültüye "İzgur" ve "İngilizce" yazdı (süzgeçten geçer); bu yüzden ipucu kullanılmıyor.
+- **Piper:** bir cümleyi ortalama 0.09 s'de (en çok 0.33 s) üretti; cümleler ortalama 2 s.
+- **ROS zinciri gerçek sunucularla** (Docker konteyneri Mac'teki sunuculara `192.168.5.2` üzerinden bağlandı, sunucular yalnız 127.0.0.1'de dinledi):
+  - Dokunma → sahte sesin sessiz kaydı → whisper "Altyazı M.K." → `empty` (1.24 s) → piper sesiyle "Seni tam anlayamadım. Bir daha söyler misin?".
+  - Gerçek konuşma WAV'ı "Merhaba Luna, bugün hava nasıl?" → harfi harfine doğru (1.21 s) → asistanın çevrimdışı cevabı → piper; cevaptan ilk sese 0.07 s.
+  - Uzak ve gürültülü "Işıkları kapatır mısın lütfen" → doğru (1.22 s).
+  - WAV'lar okunduktan sonra silindi; launch çıkış 0, 12/12 süreç temiz.
+- Mac'te gerçek whisper-server ve piper, SIGINT'te ikisi de 0 koduyla kapandı.
+
+### Bulunan ve düzeltilen sorunlar
+
+1. **Kafa dönünce soru kesiliyordu (eski bir hata).**
+   - Konuşma başlayınca dikkat düğümü 0,3 s sonra kafayı sese çeviriyor. Mikrofon kapısı hareket sırasında konuşma bayrağını 0 yapıyor; kayıt bunu sessizlik sayıp 0,7 s sonra bitiriyordu.
+   - İlk canlı koşuda 2,5 s'lik soru 1,4 s'de kesildi. `ses-bulut` dalındaki "başlamış olan biter" kuralı da bu yüzden fiilen işlemiyordu.
+   - Düzeltme: hareket süresi artık ne konuşma ne sessizlik sayılıyor (`Segmenter.feed(freeze=…)`; dikkat düğümünün donma kuralıyla aynı). Ayrıca dokunarak sorulan soru sırasında kafa hiç dönmüyor.
+2. **Luna kendi sesini soru sanabilirdi.** Eskiden Luna konuşurken de kayıt başlayabiliyordu; `always` kipinde kendi cevabı metne çevrilip buluta gidebilirdi. Artık Luna konuşurken soru başlamıyor.
+
+### Bu dalda doğrulanmayanlar
+
+- **Xavier'de hiçbir şey çalıştırılmadı.** large-v3-turbo'nun Xavier GPU'sundaki gecikmesi (M4'te 1.2 s) ve piper'ın Xavier CPU'sundaki hızı bilinmiyor.
+- Gerçek insan sesiyle tanıma denenmedi; ölçümler piper'ın sentetik sesiyle yapıldı.
+- Gerçek mikrofon, XVF3800'ün yankı engelleyicisi ve servo ile LiDAR gürültüsünün tanımaya etkisi denenmedi.
+- Telefon yüzü sayfası `connectRobot`'u henüz çağırmıyor. Gerçek dokunma yalnız birim testlerinde ve sahte HTTP isteğiyle denendi, tarayıcıda denenmedi.
+- Jetson imajı ve yukarıdaki kurulum komutları denenmedi.
+- **Kapanış:** bu daldaki 12 kapanışın birinde (ilk uzun canlı koşu) `assistant_node` kapanırken -11 verdi. Sonraki 11 kapanışta (6'sı soru-cevapsız, 5'i soru-cevaplı) görülmedi. Önceki bölümlerdeki seyrek Humble kapanış sorunlarıyla aynı olabilir; neden bulunamadı.
+
+### Açık işler
+
+- **Uyandırma sözcüğü ("Luna"):** hazır model yok, openWakeWord ile sentetik sesle **eğitim** gerekir. O zamana kadar dokun-konuş kullanılır.
+- Telefon yüzüne `connectRobot(… talkTarget …)` satırının eklenmesi (yüz teslimi seçildiğinde).
+- Xavier'de uçtan uca deneme: whisper modeli (turbo ya da small), `audio_ctx` ve `timeout_s` seçimi; gerçek mikrofonla ve gerçek insan sesiyle tanıma.
+- Söz kesme yalnız dokunmayla var; Luna konuşurken kişinin konuşmaya başlamasıyla susma yok.
+- Mute durumunun yüzde gösterilmesi ve `/luna/head/target` için öncelik düzenleyici hâlâ açık.
+
+### Tekrarlamak için
+
+Konteynerde, "SLAM, Nav2 ve dock'a git" bölümündeki gibi (`colcon build` kurulu `luna.yaml`'ı geri getirir):
+```bash
+bash /ws/src/luna_robot/tools/voice_check/live.sh short
+```
+Kayıtlar `/tmp/voice_check`'e yazılır. `short` olmadan C–F adımları da koşulur (yaklaşık 2 dakika).

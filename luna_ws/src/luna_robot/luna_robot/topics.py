@@ -54,7 +54,11 @@ AUDIO_DOA = '/luna/audio/doa'            # Float32MultiArray [bearing deg in bas
                                          #   head moving 0/1, bearing deg in the head]; speech is 0 while the head moves
 AUDIO_MUTE = '/luna/audio/mute'          # Bool command: true = mute the microphones (board buttons are inside the head)
 AUDIO_MUTED = '/luna/audio/muted'        # Bool state, 1 Hz and on change
-AUDIO_UTTERANCE = '/luna/audio/utterance'  # String: path of a finished utterance WAV (16 kHz mono) for a speech-to-text plug-in
+AUDIO_UTTERANCE = '/luna/audio/utterance'  # String: path of a finished utterance WAV (16 kHz mono) for speech-to-text
+VOICE_TALK = '/luna/voice/talk'          # Empty: a touch on the face to talk (push-to-talk, face bridge POST /talk): opens
+                                         #   the listening window, cuts Luna off mid-sentence, drops an answer still on its way
+VOICE_LISTENING = '/luna/voice/listening'  # Bool: the microphones take a question now (window open or utterance running)
+STT_STATUS = '/luna/stt/status'          # String: idle | transcribing | ok | empty | error:<reason>  (never the words)
 FACE_GAZE = '/luna/face/gaze'            # Vector3: eye gaze toward a voice, -1..1; the face prefers it to head gaze while fresh
 ASSISTANT_REQUEST = '/luna/assistant/request'  # String: what the person said (from speech-to-text, or typed for tests)
 ASSISTANT_REPLY = '/luna/assistant/reply'      # String: text to speak (cloud answer or offline fallback)

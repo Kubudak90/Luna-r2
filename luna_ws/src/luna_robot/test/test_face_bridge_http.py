@@ -15,7 +15,7 @@ for name in ['rclpy', 'rclpy.node', 'rclpy.executors', 'geometry_msgs', 'geometr
     sys.modules.setdefault(name, types.ModuleType(name))
 sys.modules['rclpy.node'].Node = object
 sys.modules['rclpy.executors'].ExternalShutdownException = type('ExternalShutdownException', (Exception,), {})
-for mod, names in [('geometry_msgs.msg', ['Vector3']), ('std_msgs.msg', ['Bool', 'Float32MultiArray', 'String', 'UInt8'])]:
+for mod, names in [('geometry_msgs.msg', ['Vector3']), ('std_msgs.msg', ['Bool', 'Empty', 'Float32MultiArray', 'String', 'UInt8'])]:
     for n in names:
         setattr(sys.modules[mod], n, type(n, (), {}))
 
@@ -91,6 +91,49 @@ class FaceBridgeHttp(unittest.TestCase):
             self.assertEqual(resp.readline(), b'data: {"type":"gaze","x":0.2,"y":0.0}\n')  # after wake, which clears gaze
         finally:
             server.shutdown()
+
+    def _talk_server(self, origin='http://127.0.0.1:4173', on_talk=True):
+        hub, port, talks = Hub(), free_port(), []
+        server = ThreadingHTTPServer(('127.0.0.1', port),
+                                     make_handler(hub, origin, on_talk=(lambda: talks.append(1)) if on_talk else None))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f'http://127.0.0.1:{port}/talk', talks
+
+    def _post(self, url, headers=None, data=b'', method='POST'):
+        req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                return resp.status, dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, dict(e.headers)
+
+    def test_touch_from_the_face_page_reaches_ros(self):
+        url, talks = self._talk_server()
+        status, headers = self._post(url, {'Origin': 'http://127.0.0.1:4173'})
+        self.assertEqual((status, talks), (204, [1]))
+        self.assertEqual(headers['Access-Control-Allow-Origin'], 'http://127.0.0.1:4173')
+        self.assertEqual(self._post(url)[0], 204)                  # curl / ros tools send no Origin
+        self.assertEqual(len(talks), 2)
+
+    def test_other_web_pages_cannot_open_the_microphones(self):
+        url, talks = self._talk_server()
+        self.assertEqual(self._post(url, {'Origin': 'https://evil.example'})[0], 403)
+        self.assertEqual(self._post(url, {'Origin': 'null'})[0], 403)
+        self.assertEqual(talks, [])
+
+    def test_preflight_big_body_get_and_no_talk_handler(self):
+        url, talks = self._talk_server()
+        status, headers = self._post(url, {'Origin': 'http://127.0.0.1:4173'}, data=None, method='OPTIONS')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['Access-Control-Allow-Methods'], 'POST')
+        self.assertEqual(self._post(url, data=b'x' * 4096)[0], 413)
+        self.assertEqual(self._post(url, data=None, method='GET')[0], 404)
+        self.assertEqual(talks, [])
+        url, _ = self._talk_server(on_talk=False)
+        self.assertEqual(self._post(url)[0], 404)
 
     def test_unknown_path_is_404(self):
         hub, port = Hub(), free_port()
