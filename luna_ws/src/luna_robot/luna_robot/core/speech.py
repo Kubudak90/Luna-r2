@@ -3,14 +3,22 @@
 The speaker (40 mm 4 Ω, front grille) hangs on the XVF3800's amplified speaker output, so audio is played to the
 array's ALSA card: that playback is also what its echo canceller hears as reference.
 
-Engines: NullTts (no voice, waits about as long as speaking would take, so listening/speaking states stay real)
-and CommandTts (any command line, e.g. espeak-ng or piper, optionally piped into aplay). Commands are split into
-argv once and the text is substituted as a whole argument: no shell, so a reply cannot inject commands."""
+Engines: NullTts (no voice, waits about as long as speaking would take, so listening/speaking states stay real),
+CommandTts (any command line, e.g. espeak-ng, optionally piped into aplay) and HttpWavTts (Piper's HTTP server:
+the voice stays loaded, each sentence comes back as a WAV and is played with aplay). Commands are split into argv
+once and the text is substituted as a whole argument: no shell, so a reply cannot inject commands.
+
+Piper (OHF-Voice/piper1-gpl, docs/API_HTTP.md, read 2026-10-25): `python3 -m piper.http_server -m <voice>`
+serves POST /synthesize with JSON {"text", "length_scale", ...} → WAV. Turkish voices in rhasspy/piper-voices on
+that day: only tr_TR-dfki-medium (fahrettin and fettah were removed at their contributors' request)."""
+import json
 import re
 import shlex
 import subprocess
 import threading
 from collections import deque
+
+from .assistant import TransportError, urllib_transport
 
 _LINK = re.compile(r'\[([^\]]*)\]\([^)]*\)')
 _URL = re.compile(r'https?://\S+')
@@ -109,8 +117,60 @@ class CommandTts:
                     p.terminate()
 
 
-def make_tts(engine, command='', player='', device='default'):
-    """engine 'none' → NullTts; 'command' → CommandTts from command-line strings (split here, not by a shell)."""
+class TtsError(Exception):
+    pass
+
+
+class HttpWavTts:
+    """POST the sentence to a WAV-returning TTS server, then play the WAV with `player` (argv template reading WAV
+    on stdin, e.g. ['aplay', '-q', '-D', '{device}']; aplay takes the rate from the WAV header). stop() kills
+    the playback; a sentence still being synthesised is dropped when it arrives."""
+
+    def __init__(self, url, player, device='default', length_scale=1.0, timeout_s=20.0,
+                 transport=urllib_transport, popen=subprocess.Popen):
+        self.url, self.player, self.device, self.length_scale = url, player, device, length_scale
+        self.timeout_s, self.transport, self.popen = timeout_s, transport, popen
+        self.proc, self.stopped = None, threading.Event()
+        self.lock = threading.Lock()
+
+    def say(self, text):
+        self.stopped.clear()
+        body = json.dumps({'text': text, 'length_scale': self.length_scale}, ensure_ascii=False).encode()
+        try:
+            res = self.transport(self.url, {'Content-Type': 'application/json'}, body, self.timeout_s)
+        except TransportError as e:
+            raise TtsError(f'TTS server {self.url} unreachable: {e}') from e
+        if res.status != 200 or not res.body.startswith(b'RIFF'):
+            raise TtsError(f'TTS server {self.url} answered {res.status}, {len(res.body)} bytes, not a WAV')
+        with self.lock:
+            if self.stopped.is_set():
+                return
+            self.proc = self.popen([a.replace('{device}', self.device) for a in self.player], stdin=subprocess.PIPE,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.proc.communicate(res.body, timeout=self.timeout_s + len(res.body) / 32000)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()
+        except (BrokenPipeError, OSError):
+            pass                                   # stopped mid-sentence: the player is gone
+
+    def stop(self):
+        with self.lock:
+            self.stopped.set()
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+
+
+TTS_ENGINES = ('none', 'command', 'piper_http')
+
+
+def make_tts(engine, command='', player='', device='default', url='', length_scale=1.0):
+    """engine 'none' → NullTts; 'command' → CommandTts from command-line strings (split here, not by a shell);
+    'piper_http' → HttpWavTts(url) played with `player`."""
+    if engine not in TTS_ENGINES:
+        raise ValueError(f'tts_engine {engine!r}: expected one of {TTS_ENGINES}')
     if engine == 'command' and command.strip():
         return CommandTts(shlex.split(command), shlex.split(player) if player.strip() else None, device)
+    if engine == 'piper_http':
+        return HttpWavTts(url, shlex.split(player), device, length_scale)
     return NullTts()

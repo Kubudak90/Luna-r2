@@ -3,13 +3,15 @@
 Provider-agnostic (OpenAI-compatible chat completions; default Kimi / Moonshot). Nothing is sent anywhere unless
 cloud_enabled is true (the owner's consent) and a key is found in the environment (api_key_env) or in
 api_key_file outside any git checkout. Otherwise, and on every network or API failure, a short offline reply is
-spoken instead. Questions and answers are not logged, only their length and the outcome."""
+spoken instead. Questions and answers are not logged, only their length and the outcome.
+A touch on the face (/luna/voice/talk) means a new question is coming: a waiting question is dropped, and so is
+the answer to the one in flight when it arrives."""
 import json
 import queue
 import threading
 
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 
 from . import topics as T
 from .entry import run
@@ -47,7 +49,9 @@ class AssistantNode(Node):
         self.pub_reply = self.create_publisher(String, T.ASSISTANT_REPLY, 10)
         self.pub_status = self.create_publisher(String, T.ASSISTANT_STATUS, 10)
         self.pending = queue.Queue(maxsize=1)
+        self.talks = 0                         # touches so far; an answer is spoken only if none came while it was asked
         self.create_subscription(String, T.ASSISTANT_REQUEST, self._request, 10)
+        self.create_subscription(Empty, T.VOICE_TALK, self._talk, 10)
         threading.Thread(target=self._worker, daemon=True).start()
         state = 'cloud ON' if enabled and key else ('cloud on, but no key' if enabled else 'cloud OFF (no consent)')
         self.get_logger().info(f'assistant {provider.name}/{provider.model}: {state}')
@@ -60,12 +64,26 @@ class AssistantNode(Node):
             pass
         self.pending.put_nowait(msg.data)
 
+    def _talk(self, _msg):
+        self.talks += 1
+        try:
+            self.pending.get_nowait()
+        except queue.Empty:
+            pass
+
     def _worker(self):
         while True:
             text = self.pending.get()
+            talks = self.talks
             self.pub_status.publish(String(data='thinking'))
             reply = self.client.ask(text)
             if reply is None:
+                self.pub_status.publish(String(data='idle'))
+                continue
+            if self.talks != talks:
+                if reply.source == 'cloud':
+                    self.client.forget_last()
+                self.get_logger().info('answer dropped: the face was touched for a new question meanwhile')
                 self.pub_status.publish(String(data='idle'))
                 continue
             status = 'ok' if reply.source == 'cloud' else f'offline:{reply.reason}'

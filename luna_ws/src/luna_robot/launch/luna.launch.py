@@ -16,15 +16,24 @@ depth:= where /oak/points comes from (default: sim with sim:=true, else off)
         config/oakd.yaml, not tried on hardware)
   off   no depth camera
 sim_world:= the simulator's room (core/sim_worlds.py: room, toy, table, chair, dock, door).
-Voice: voice:=false leaves out audio/attention/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival;
+Voice: voice:=false leaves out audio/attention/stt/assistant/speech; doa:=usb|mock|off (XVF3800 direction of arrival;
 use doa:=mock or voice:=false with mock:=true / sim:=true); cloud:=true is the owner's consent for the cloud
-assistant (it also needs a key, see config/luna.yaml)."""
+assistant (it also needs a key, see config/luna.yaml).
+voice_servers:=true (default) also starts whisper.cpp's whisper-server (speech-to-text, whisper_model:=) and Piper's
+HTTP server (Turkish voice, piper_voice:=) on the addresses luna_stt / luna_speech use in config/luna.yaml, each
+only if its program and model are installed (otherwise a log line, and Luna says she cannot understand / stays
+silent). Both run on the robot: no audio or text leaves it."""
+import importlib.util
 import os
+import shutil
+from urllib.parse import urlsplit
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction,
-                            SetEnvironmentVariable)
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo,
+                            OpaqueFunction, SetEnvironmentVariable)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -32,7 +41,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from luna_robot.core.robot_model import drop_links
-from luna_robot.launch_util import IGNORE_LATE_SIGINT
+from luna_robot.launch_util import IGNORE_LATE_SIGINT, STOP_AS_CLEAN_EXIT
 CAMERAS = ('left', 'right')
 OAK_OPTICAL_FRAMES = ('oak_rgb_camera_optical_frame', 'oak_left_camera_optical_frame', 'oak_right_camera_optical_frame')
 
@@ -120,6 +129,48 @@ def _depth(context, params):
                           'params_file': os.path.join(share, 'config', 'oakd.yaml')}.items())]
 
 
+def _truthy(context, name):
+    return context.perform_substitution(LaunchConfiguration(name)).lower() in ('true', '1')
+
+
+def _host_port(url, default_port):
+    parts = urlsplit(url)
+    return parts.hostname or '127.0.0.1', str(parts.port or default_port)
+
+
+def _voice_servers(context, params):
+    """whisper-server for luna_stt and Piper's HTTP server for luna_speech, bound where config/luna.yaml points them."""
+    if not (_truthy(context, 'voice') and _truthy(context, 'voice_servers')):
+        return []
+    with open(params) as f:
+        cfg = yaml.safe_load(f)
+    stt = cfg.get('luna_stt', {}).get('ros__parameters', {})
+    tts = cfg.get('luna_speech', {}).get('ros__parameters', {})
+    actions = []
+    if stt.get('stt_engine') == 'whisper_server':
+        model = context.perform_substitution(LaunchConfiguration('whisper_model'))
+        exe = shutil.which('whisper-server')
+        if exe and os.path.isfile(model):
+            host, port = _host_port(stt.get('stt_url', ''), 8178)
+            actions.append(ExecuteProcess(
+                cmd=[exe, '-m', model, '-l', stt.get('language', 'tr'), '--host', host, '--port', port, '-sns'],
+                name='whisper_server', output='log', prefix=STOP_AS_CLEAN_EXIT))
+        else:
+            actions.append(LogInfo(msg='speech-to-text server not started: '
+                                   + ('whisper-server not on PATH' if not exe else f'no model at {model}')))
+    if tts.get('tts_engine') == 'piper_http':
+        voice = context.perform_substitution(LaunchConfiguration('piper_voice'))
+        if importlib.util.find_spec('piper') and os.path.isfile(voice):
+            host, port = _host_port(tts.get('tts_url', ''), 5000)
+            actions.append(ExecuteProcess(
+                cmd=['python3', '-m', 'piper.http_server', '-m', voice, '--host', host, '--port', port],
+                name='piper_server', output='log', prefix=STOP_AS_CLEAN_EXIT))
+        else:
+            actions.append(LogInfo(msg='TTS server not started: ' + ('piper-tts is not installed'
+                                   if not importlib.util.find_spec('piper') else f'no voice at {voice}')))
+    return actions
+
+
 def generate_launch_description():
     share = get_package_share_directory('luna_robot')
     params = os.path.join(share, 'config', 'luna.yaml')
@@ -145,6 +196,10 @@ def generate_launch_description():
         DeclareLaunchArgument('voice', default_value='true'),
         DeclareLaunchArgument('doa', default_value='usb'),
         DeclareLaunchArgument('cloud', default_value='false'),
+        DeclareLaunchArgument('voice_servers', default_value='true',
+                              description='start whisper-server and the Piper HTTP server when installed'),
+        DeclareLaunchArgument('whisper_model', default_value='/models/whisper/ggml-large-v3-turbo-q5_0.bin'),
+        DeclareLaunchArgument('piper_voice', default_value='/models/piper/tr_TR-dfki-medium.onnx'),
         OpaqueFunction(function=_robot_state_publisher, args=[urdf]),
         Node(package='luna_robot', executable='base_node', name='luna_base', parameters=[params]),
         Node(package='luna_robot', executable='head_node', name='luna_head', parameters=[params]),
@@ -163,6 +218,8 @@ def generate_launch_description():
         Node(package='luna_robot', executable='audio_node', name='luna_audio', condition=voice,
              parameters=[params, {'doa_source': ParameterValue(LaunchConfiguration('doa'), value_type=str)}]),
         Node(package='luna_robot', executable='attention_node', name='luna_attention', parameters=[params], condition=voice),
+        Node(package='luna_robot', executable='stt_node', name='luna_stt', parameters=[params], condition=voice),
+        OpaqueFunction(function=_voice_servers, args=[params]),
         Node(package='luna_robot', executable='assistant_node', name='luna_assistant', condition=voice,
              parameters=[params, {'cloud_enabled': ParameterValue(LaunchConfiguration('cloud'), value_type=bool)}]),
         Node(package='luna_robot', executable='speech_node', name='luna_speech', parameters=[params], condition=voice),

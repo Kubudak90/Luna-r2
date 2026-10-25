@@ -42,7 +42,9 @@ luna_audio:                  # ReSpeaker XVF3800 under the head top shell (R07)
     doa_rate_hz: 10.0
     doa_zero_deg: 0.0        # CALIBRATE: board azimuth for a voice straight ahead of the face
     doa_direction: 1         # CALIBRATE: -1 if the board counts against the pan direction
-    capture: false           # microphone capture into utterance WAVs (records people: off by default)
+    capture: true            # microphone capture; with push_to_talk nothing is kept unless the face was touched
+    listen_mode: push_to_talk  # push_to_talk: one question per touch on the face | always: every utterance (wake word later)
+    listen_window_s: 6.0     # after a touch: time to start speaking
     alsa_device: auto        # auto = the XVF3800 card from /proc/asound/cards
     rate: 16000
     channels: 2              # Seeed USB firmware v2.x: 2 channels at 16 kHz (6-channel firmware differs)
@@ -63,6 +65,19 @@ luna_attention:
     min_speech_s: 0.3
     hold_s: 4.0
 
+luna_stt:                    # speech-to-text on the robot; the WAV is deleted once read
+  ros__parameters:
+    stt_engine: whisper_server   # whisper_server | command | none  (launch starts whisper-server: voice_servers:=true)
+    stt_url: http://127.0.0.1:8178/inference
+    stt_command: whisper-cli -m /models/whisper/ggml-large-v3-turbo-q5_0.bin -l {lang} -nt -np -f {wav}
+    language: tr
+    timeout_s: 20.0          # MEASURE on the Xavier: large-v3-turbo vs small, GPU build
+    prompt: ''               # "Luna" as a prompt did not fix the name (M4, 2026-10-25) and made noise hallucinate with audio_ctx
+    audio_ctx: 0             # 0 = full 30 s window; 768 (≈15 s) halved the time on an M4 at equal accuracy: try on the Xavier
+    min_chars: 2
+    delete_wav: true
+    reply_on_failure: true   # "Seni tam anlayamadım…" instead of silence after a touch
+
 luna_assistant:
   ros__parameters:
     cloud_enabled: false     # owner's consent; launch: cloud:=true. Without it nothing leaves the robot.
@@ -81,9 +96,11 @@ luna_assistant:
 
 luna_speech:
   ros__parameters:
-    tts_engine: none         # none | command  (none: silent, keeps the speaking state realistic)
-    tts_command: espeak-ng -v tr --stdout {text}   # example only: espeak-ng is not installed in the image
-    tts_player: aplay -q -D {device}
+    tts_engine: piper_http   # piper_http | command | none  (launch starts Piper's server: voice_servers:=true)
+    tts_url: http://127.0.0.1:5000/synthesize
+    tts_length_scale: 1.0    # > 1 speaks slower (children: try 1.1)
+    tts_command: espeak-ng -v tr --stdout {text}   # for tts_engine: command; espeak-ng is not installed in the image
+    tts_player: aplay -q -D {device}               # reads the WAV on stdin (piper_http and command)
     alsa_device: auto
     max_chars: 400
 

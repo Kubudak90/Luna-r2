@@ -1,6 +1,6 @@
 """Turn toward a voice: /luna/audio/doa (already in base_link, speech gated by mute and head motion) → eye gaze
 for the face (/luna/face/gaze) and a gentle head turn (/luna/head/target). Logic in core/attention.py; head
-targets go out only while attention uses the head."""
+targets go out only while attention uses the head, and not while Luna takes a question (/luna/voice/listening)."""
 import time
 
 from geometry_msgs.msg import Vector3
@@ -13,6 +13,7 @@ from .core.attention import Attention, AttentionConfig
 
 TUNABLE = ['max_pan_deg', 'listen_tilt_deg', 'turn_rate_deg_s', 'deadband_deg', 'min_speech_s', 'hold_s']
 DOA_FRESH_S = 0.35
+LISTENING_FRESH_S = 1.0     # audio_node publishes /luna/voice/listening at 5 Hz while capture is on
 
 
 class AttentionNode(Node):
@@ -24,9 +25,11 @@ class AttentionNode(Node):
         self.att = Attention(AttentionConfig(**{n: float(self.get_parameter(n).value) for n in TUNABLE}))
         self.doa, self.doa_t = None, 0.0
         self.dock_state, self.speaking = 'UNKNOWN', False            # UNKNOWN: eyes only until the dock reports
+        self.listening, self.listening_t = False, float('-inf')
         self.create_subscription(Float32MultiArray, T.AUDIO_DOA, self._doa, 10)
         self.create_subscription(String, T.DOCK_STATE, lambda m: setattr(self, 'dock_state', m.data), 10)
         self.create_subscription(Bool, T.VOICE_SPEAKING, lambda m: setattr(self, 'speaking', m.data), 10)
+        self.create_subscription(Bool, T.VOICE_LISTENING, self._listening, 10)
         self.pub_target = self.create_publisher(Vector3, T.HEAD_TARGET, 10)
         self.pub_gaze = self.create_publisher(Vector3, T.FACE_GAZE, 10)
         self.create_timer(0.05, self._tick)
@@ -36,12 +39,16 @@ class AttentionNode(Node):
             moving = len(msg.data) >= 4 and msg.data[3] > 0.5
             self.doa, self.doa_t = (msg.data[0], msg.data[1] > 0.5, moving), time.monotonic()
 
+    def _listening(self, msg):
+        self.listening, self.listening_t = bool(msg.data), time.monotonic()
+
     def _tick(self):
         now = time.monotonic()
         fresh = self.doa is not None and now - self.doa_t < DOA_FRESH_S
         out = self.att.update(now, bearing_deg=self.doa[0] if fresh else None, speech=fresh and self.doa[1],
                               dock_state=self.dock_state, self_speaking=self.speaking,
-                              head_moving=fresh and self.doa[2])
+                              head_moving=fresh and self.doa[2],
+                              hold_head=self.listening and now - self.listening_t < LISTENING_FRESH_S)
         if out.head_target is not None:
             self.pub_target.publish(Vector3(x=out.head_target[0], y=out.head_target[1], z=0.0))
         if out.gaze is not None:
